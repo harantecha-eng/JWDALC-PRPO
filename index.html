@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>PR / PO</title>
+  <meta name="theme-color" content="#1f3a5f">
+  <meta name="description" content="Purchase requests, approvals and purchase orders">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PR PO">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="login" class="login hidden">
+    <form id="loginForm" class="login-card" autocomplete="on">
+      <img src="icons/icon-192.png" alt="" class="login-logo">
+      <h1>PR / PO</h1>
+      <p class="muted">Sign in with your username and PIN</p>
+      <label>Username<input id="loginUser" autocomplete="username" autocapitalize="none" required></label>
+      <label>PIN<input id="loginPin" type="password" inputmode="numeric" autocomplete="current-password" required></label>
+      <button class="btn primary block" type="submit">Sign in</button>
+      <p id="loginErr" class="err" role="alert"></p>
+      <div id="demoHint" class="demo-hint hidden"></div>
+    </form>
+  </section>
+
+  <section id="app" class="hidden">
+    <nav class="side" id="side" aria-label="Main"></nav>
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="backBtn" aria-label="Back"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <h1 id="pageTitle">Home</h1>
+        <span class="sync" id="sync"></span>
+        <a class="icon-btn bell" href="#notifications" aria-label="Notifications"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span class="dot hidden" id="bellDot"></span></a>
+      </header>
+      <div id="banner" class="banner hidden"></div>
+      <main id="view" tabindex="-1"></main>
+    </div>
+    <nav class="bottom" id="bottom" aria-label="Main"></nav>
+  </section>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="sheet">
+      <div class="sheet-head"><h2 id="mTitle"></h2><button class="icon-btn" id="mClose" aria-label="Close"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+      <div class="sheet-body" id="mBody"></div>
+      <div class="sheet-foot" id="mFoot"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="config.js"></script>
+  <script src="core.js"></script>
+  <script src="demo.js"></script>
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
