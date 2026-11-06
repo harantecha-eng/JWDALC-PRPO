@@ -1,7 +1,7 @@
 // ===== PR/PO System — app settings =====
 window.APP_CONFIG = {
   // Paste your Apps Script Web App URL (ends with /exec). Leave '' to run in DEMO mode.
-  API_URL: 'https://script.google.com/macros/s/AKfycbyo-U6dwCnsPTDbHVD5cKRvhJnU2XHJ51CB8JVwp6w1lexrM1KwLedPoKkPme8vLj7-VQ/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbyGy2C_b9TtAyK7S_skVnvzUXcQY95C4EeXWsSBQdOOHIetbUfdF9E_G-EbCl-kIJaDzA/exec',
 
   APP_NAME: 'PR / PO',
   REFRESH_SECONDS: 60,
