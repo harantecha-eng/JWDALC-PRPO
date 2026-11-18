@@ -46,26 +46,31 @@
   // ---------- roles ----------
   const me = () => S.boot.user;
   const isRole = (...r) => r.includes(me().role);
-  const isApprover = () => isRole('DeptHead', 'Manager', 'Executive', 'Admin');
-  const isPOApprover = () => isRole('Manager', 'Executive', 'Admin');
+  const isApprover = () => isRole('DeptHead', 'Manager', 'MD', 'Admin');
+  const isPOApprover = () => isRole('Manager', 'MD', 'Admin');
   const isBuyer = () => isRole('Purchasing', 'Admin');
-  const seeAll = () => isRole('Manager', 'Executive', 'Purchasing', 'Store', 'Admin');
-  const seeDash = () => isRole('Manager', 'Executive', 'Purchasing', 'Admin');
-  const seePOs = () => isRole('Purchasing', 'Store', 'Admin', 'Manager', 'Executive');
+  const seeAll = () => isRole('Manager', 'MD', 'Purchasing', 'Store', 'Admin');
+  const seeDash = () => isRole('Manager', 'MD', 'Purchasing', 'Admin');
+  const seePOs = () => isRole('Purchasing', 'Store', 'Admin', 'Manager', 'MD');
 
   // ---------- chips ----------
   const chip = (t, cls = '') => `<span class="chip ${cls}">${esc(t)}</span>`;
-  const PR_CLS = { 'Pending Approval': 'amber', Returned: 'red', Rejected: 'red', Approved: 'green', Ordered: 'blue' };
-  const PO_CLS = { 'Pending Approval': 'amber', Issued: 'blue', 'Partially Received': 'amber', Received: 'green' };
+  // each status: [css class, icon]
+  const ST = {
+    'Draft': ['st-draft', 'file'], 'Pending Approval': ['st-wait', 'clock'], 'Returned': ['st-returned', 'back'], 'Rejected': ['st-rejected', 'x'],
+    'Approved': ['st-approved', 'ok'], 'Ordered': ['st-ordered', 'po'], 'Closed': ['st-closed', 'ok'], 'Cancelled': ['st-cancelled', 'x'],
+    'Issued': ['st-ordered', 'po'], 'Partially Received': ['st-partial', 'box'], 'Received': ['st-received', 'box'],
+  };
+  const stChip = (status, text, extra) => { const [c, i] = ST[status] || ['', '']; return `<span class="chip ${extra || c}">${i ? ic(i) : ''}${esc(text)}</span>`; };
   function prChip(p) {
     let t = p.status;
-    if (p.status === 'Pending Approval') t = 'Waiting · ' + p.waitingOn;
+    if (p.status === 'Pending Approval') t = 'Waiting · ' + p.waitingOn + ' · ' + ageTxt(ageDays(p.lastActionAt));
     if (p.status === 'Approved') t = 'Approved · waiting PO';
     if (p.status === 'Ordered') t = 'PO issued';
-    const cls = p.status === 'Pending Approval' && ageDays(p.lastActionAt) >= 2 ? 'red' : PR_CLS[p.status] || '';
-    return chip(t + (p.status === 'Pending Approval' ? ' · ' + ageTxt(ageDays(p.lastActionAt)) : ''), cls);
+    if (p.status === 'Returned') t = 'Sent back for changes';
+    return stChip(p.status, t, p.status === 'Pending Approval' && ageDays(p.lastActionAt) >= 2 ? 'st-overdue' : '');
   }
-  const poChip = p => (p.late ? chip('Late · due ' + fmtD(p.deliveryDate), 'red') : chip(p.status, PO_CLS[p.status] || ''));
+  const poChip = p => (p.late ? stChip('Issued', 'Late · due ' + fmtD(p.deliveryDate), 'st-overdue') : stChip(p.status, p.status === 'Pending Approval' ? 'Waiting PO approval' : p.status));
 
   // ---------- ui helpers ----------
   function toast(msg, bad) {
@@ -105,7 +110,7 @@
 
   // ---------- auth ----------
   const DEMO_USERS = [['admin', '1234', 'Admin'], ['sokha', '1111', 'Requester · Warehouse'], ['dara', '2222', 'Dept head · Warehouse'], ['vanna', '3333', 'Manager'],
-    ['chan', '4444', 'Executive'], ['mony', '5555', 'Purchasing'], ['rith', '6666', 'Store']];
+    ['chan', '4444', 'MD'], ['mony', '5555', 'Purchasing'], ['rith', '6666', 'Store']];
   function showLogin() {
     $('#app').classList.add('hidden'); $('#login').classList.remove('hidden');
     if (Api.demo) {
@@ -213,20 +218,21 @@
 
   // ---------- shared renderers ----------
   function prCard(p) {
-    return `<a class="doc" href="#${esc(p.id)}">
+    return `<a class="doc ${(ST[p.status] || [''])[0]}" href="#${esc(p.id)}">
       <div class="top"><span>${esc(p.id)} · ${fmtD(p.submittedAt || p.createdAt)}</span><span>${esc(deptName(p.department))}</span></div>
-      <div class="t">${esc(p.title)}</div>
+      <div class="t">${p.priority === 'Urgent' ? '<span class="chip red" style="margin-right:6px;vertical-align:2px">URGENT</span>' : ''}${esc(p.title)}</div>
       <div class="bottom-line">${prChip(p)}<span class="amt">${money(p.totalAmount, p.currency)}</span></div>
       ${p.currency !== 'USD' || seeAll() ? `<div class="top"><span>${esc(p.requesterName)}</span><span>${p.currency !== 'USD' ? '≈ ' + usd(p.totalUSD) : ''}</span></div>` : ''}
     </a>`;
   }
   function poCard(p) {
-    return `<a class="doc" href="#${esc(p.id)}">
+    return `<a class="doc ${(ST[p.status] || [''])[0]}" href="#${esc(p.id)}">
       <div class="top"><span>${esc(p.id)} · ${esc(p.prId)}</span><span>${esc(p.vendorName)}</span></div>
       <div class="t">${esc(p.title)}</div>
       <div class="bottom-line">${poChip(p)}<span class="amt">${money(p.total, p.currency)}</span></div>
     </a>`;
   }
+  const byUrgentThenOldest = (a, b) => ((b.priority === 'Urgent') - (a.priority === 'Urgent')) || a.lastActionAt.localeCompare(b.lastActionAt);
   const listOrEmpty = (arr, fn, msg) => (arr.length ? `<div class="list">${arr.map(fn).join('')}</div>` : `<div class="empty">${msg}</div>`);
   function budgetCard(b) {
     if (!b || !b.budgetUSD) return '';
@@ -240,7 +246,7 @@
   // ---------- HOME ----------
   async function home() {
     const u = me(), mine = S.prs.filter(p => p.requester === u.username);
-    const waitMe = S.prs.filter(p => p.canApprove).sort((a, b) => a.lastActionAt.localeCompare(b.lastActionAt));
+    const waitMe = S.prs.filter(p => p.canApprove).sort(byUrgentThenOldest);
     const poWait = isPOApprover() ? S.pos.filter(p => p.status === 'Pending Approval') : [];
     const toPO = isBuyer() ? S.prs.filter(p => p.status === 'Approved') : [];
     const incoming = isRole('Store', 'Purchasing', 'Admin') ? S.pos.filter(p => ['Issued', 'Partially Received'].includes(p.status)).sort((a, b) => (a.deliveryDate || '9').localeCompare(b.deliveryDate || '9')) : [];
@@ -268,38 +274,116 @@
   }
 
   // ---------- PR LIST ----------
-  const listState = { q: '', status: 'open', scope: 'mine', dept: '' };
+  const PR_TABS = [['open', 'Open', p => !['Closed', 'Rejected', 'Cancelled'].includes(p.status)], ['done', 'Completed', p => p.status === 'Closed'],
+    ['stopped', 'Rejected / Cancelled', p => ['Rejected', 'Cancelled'].includes(p.status)], ['all', 'All', () => true]];
+  const listState = { q: '', tab: 'open', scope: 'mine', dept: '', month: '' };
+  const monthsOf = (rows, key) => [...new Set(rows.map(r => String(r[key] || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const monthLabel = m => new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
   async function prList() {
-    const sts = ['Draft', 'Pending Approval', 'Returned', 'Approved', 'Ordered', 'Closed', 'Rejected', 'Cancelled'];
     if (seeAll() && listState.scope === 'mine' && !listState._init) { listState.scope = 'all'; }
     listState._init = true;
-    V().innerHTML = `<div class="filters">
-        <input type="search" id="fq" placeholder="Search PR, title, item owner…" value="${esc(listState.q)}" aria-label="Search">
-        <select id="fs" aria-label="Status"><option value="open">Open</option><option value="">All statuses</option>${sts.map(s => `<option>${s}</option>`).join('')}</select>
+    V().innerHTML = `<div class="tabbar" id="ptabs" role="tablist"></div>
+      <div class="filters">
+        <input type="search" id="fq" placeholder="Search PR, title, requester…" value="${esc(listState.q)}" aria-label="Search">
+        <select id="fm" aria-label="Month"><option value="">All months</option>${monthsOf(S.prs, 'createdAt').map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('')}</select>
         ${seeAll() ? `<select id="fd" aria-label="Department"><option value="">All departments</option>${S.boot.departments.map(d => `<option value="${esc(d.code)}">${esc(d.name)}</option>`).join('')}</select>` : ''}
         <div class="seg" id="fscope"><button data-v="mine">Mine</button><button data-v="all">${seeAll() ? 'All' : 'My department'}</button></div>
+        <button class="btn small" id="exp">${ic('file')}Export Excel</button>
       </div><div id="fl"></div>`;
-    $('#fs').value = listState.status; if ($('#fd')) $('#fd').value = listState.dept;
+    $('#fm').value = listState.month; if ($('#fd')) $('#fd').value = listState.dept;
     const draw = () => {
       [...$('#fscope').children].forEach(b => b.classList.toggle('on', b.dataset.v === listState.scope));
       const q = listState.q.toLowerCase();
-      const rows = S.prs.filter(p => (listState.scope === 'all' || p.requester === me().username)
-        && (!listState.status || (listState.status === 'open' ? !['Closed', 'Rejected', 'Cancelled'].includes(p.status) : p.status === listState.status))
+      const base = S.prs.filter(p => (listState.scope === 'all' || p.requester === me().username)
         && (!listState.dept || p.department === listState.dept)
-        && (!q || [p.id, p.title, p.requesterName, p.department].join(' ').toLowerCase().includes(q)))
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      $('#fl').innerHTML = listOrEmpty(rows, prCard, 'No requests match these filters');
+        && (!listState.month || String(p.createdAt).slice(0, 7) === listState.month)
+        && (!q || [p.id, p.title, p.requesterName, p.department, p.costCenter].join(' ').toLowerCase().includes(q)));
+      $('#ptabs').innerHTML = PR_TABS.map(([k, l, f]) => `<button role="tab" data-t="${k}" class="${listState.tab === k ? 'on' : ''}" aria-selected="${listState.tab === k}">${l} <span class="n">${base.filter(f).length}</span></button>`).join('');
+      const fn = PR_TABS.find(t => t[0] === listState.tab)[2];
+      const rows = base.filter(fn).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      $('#fl').innerHTML = listOrEmpty(rows, prCard, listState.tab === 'done' ? 'No completed requests in this view yet' : 'No requests match these filters');
     };
+    $('#ptabs').onclick = e => { const b = e.target.closest('button[data-t]'); if (b) { listState.tab = b.dataset.t; draw(); } };
     $('#fq').oninput = e => { listState.q = e.target.value; draw(); };
-    $('#fs').onchange = e => { listState.status = e.target.value; draw(); };
+    $('#fm').onchange = e => { listState.month = e.target.value; draw(); };
     if ($('#fd')) $('#fd').onchange = e => { listState.dept = e.target.value; draw(); };
     $('#fscope').onclick = e => { const b = e.target.closest('button'); if (b) { listState.scope = b.dataset.v; draw(); } };
+    $('#exp').onclick = () => exportModal('pr');
     draw();
+  }
+
+  // ---------- tiny .xlsx writer (no external library) ----------
+  const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  function zipStore(files) {
+    const enc = new TextEncoder(), parts = [], central = []; let off = 0;
+    const u16 = n => [n & 255, (n >> 8) & 255], u32 = n => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+    files.forEach(([name, text]) => {
+      const nb = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+      const head = [...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nb.length), ...u16(0)];
+      parts.push(new Uint8Array(head), nb, data);
+      central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nb.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nb);
+      off += head.length + nb.length + data.length;
+    });
+    const csize = central.reduce((a, x) => a + x.length, 0);
+    const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(csize), ...u32(off), ...u16(0)]);
+    return new Blob([...parts, ...central, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+  function buildXlsx(sheets) {
+    const x = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    const col = i => { let s2 = ''; i++; while (i) { const m = (i - 1) % 26; s2 = String.fromCharCode(65 + m) + s2; i = Math.floor((i - 1) / 26); } return s2; };
+    const sheetXml = rows => {
+      const widths = rows[0].map((_, c) => Math.min(50, Math.max(8, ...rows.slice(0, 200).map(r => String(r[c] ?? '').length + 2))));
+      return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+        '<cols>' + widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('') + '</cols><sheetData>' +
+        rows.map((r, ri) => `<row r="${ri + 1}">` + r.map((v, ci) => { const ref = col(ci) + (ri + 1), st = ri === 0 ? ' s="1"' : (typeof v === 'number' ? ' s="2"' : '');
+          return typeof v === 'number' && isFinite(v) ? `<c r="${ref}"${st}><v>${v}</v></c>` : `<c r="${ref}" t="inlineStr"${st}><is><t xml:space="preserve">${x(v)}</t></is></c>`; }).join('') + '</row>').join('') +
+        `</sheetData><autoFilter ref="A1:${col(rows[0].length - 1)}${rows.length}"/></worksheet>`;
+    };
+    const files = [
+      ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+        sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') + '</Types>'],
+      ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+      ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+        sheets.map(([n], i) => `<sheet name="${x(n).slice(0, 31)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') + '</sheets></workbook>'],
+      ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') +
+        `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+      ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F3A5F"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
+      ...sheets.map(([, rows], i) => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(rows)]),
+    ];
+    return zipStore(files);
+  }
+  function downloadBlob(blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+
+  // ---------- EXPORT ----------
+  function exportModal(kind) {
+    const pad = n => String(n).padStart(2, '0'), d = new Date(), iso = x => `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+    const first = new Date(d.getFullYear(), d.getMonth(), 1), lastStart = new Date(d.getFullYear(), d.getMonth() - 1, 1), lastEnd = new Date(d.getFullYear(), d.getMonth(), 0);
+    openModal('Export ' + (kind === 'pr' ? 'purchase requests' : 'purchase orders') + ' to Excel', `<div class="row" style="margin-bottom:12px">
+        <button class="btn small" data-r="${iso(first)}|${iso(d)}">This month</button><button class="btn small" data-r="${iso(lastStart)}|${iso(lastEnd)}">Last month</button>
+        <button class="btn small" data-r="${d.getFullYear()}-01-01|${iso(d)}">This year</button></div>
+      <div class="grid2"><label class="field">From<input type="date" id="exFrom" value="${iso(first)}"></label><label class="field">To<input type="date" id="exTo" value="${iso(d)}"></label></div>
+      <p class="muted" style="font-size:12px;margin:10px 0 0">${kind === 'pr' ? 'By PR created date.' : 'By PO issued date (or created date for drafts).'} The file has 2 sheets: documents and item lines. Only documents you can see are included.</p>`,
+    '<button class="btn" id="exNo">Cancel</button><button class="btn primary" id="exGo">Download .xlsx</button>');
+    $('#mBody').onclick = e => { const b = e.target.closest('[data-r]'); if (b) { const [f, t] = b.dataset.r.split('|'); $('#exFrom').value = f; $('#exTo').value = t; } };
+    $('#exNo').onclick = closeModal;
+    $('#exGo').onclick = async e => {
+      const from = $('#exFrom').value, to = $('#exTo').value;
+      const r = await run(e.currentTarget, () => api('export', { kind, from, to })); if (!r) return;
+      if (!r.rows.length) { toast('Nothing in this date range', true); return; }
+      const name = `${kind === 'pr' ? 'PR' : 'PO'}_${from}_to_${to}`;
+      downloadBlob(buildXlsx([[kind === 'pr' ? 'Purchase requests' : 'Purchase orders', [r.head, ...r.rows]], ['Item lines', [r.lineHead, ...r.lines]]]), name + '.xlsx');
+      closeModal(); toast(`Exported ${r.rows.length} ${kind === 'pr' ? 'PRs' : 'POs'}`);
+    };
   }
 
   // ---------- APPROVALS ----------
   async function approvals() {
-    const prs = S.prs.filter(p => p.canApprove).sort((a, b) => a.lastActionAt.localeCompare(b.lastActionAt));
+    const prs = S.prs.filter(p => p.canApprove).sort(byUrgentThenOldest);
     const pos = isPOApprover() ? S.pos.filter(p => p.status === 'Pending Approval') : [];
     const recent = S.prs.filter(p => !p.canApprove && p.status === 'Pending Approval').slice(0, 8);
     V().innerHTML = `<div class="stack">
@@ -336,24 +420,32 @@
   }
 
   // ---------- PO LIST ----------
-  const poState = { q: '', status: 'open' };
+  const PO_TABS = [['open', 'Open', p => !['Closed', 'Cancelled'].includes(p.status)], ['closed', 'Closed', p => p.status === 'Closed'], ['cancelled', 'Cancelled', p => p.status === 'Cancelled'], ['all', 'All', () => true]];
+  const poState = { q: '', tab: 'open', month: '', late: false };
   async function poList() {
-    const sts = ['Draft', 'Pending Approval', 'Issued', 'Partially Received', 'Received', 'Closed', 'Cancelled'];
-    V().innerHTML = `<div class="filters"><input type="search" id="pq" placeholder="Search PO, PR, vendor…" value="${esc(poState.q)}" aria-label="Search">
-      <select id="ps" aria-label="Status"><option value="open">Open</option><option value="late">Late only</option><option value="">All statuses</option>${sts.map(s => `<option>${s}</option>`).join('')}</select></div>
+    V().innerHTML = `<div class="tabbar" id="potabs" role="tablist"></div>
+      <div class="filters"><input type="search" id="pq" placeholder="Search PO, PR, vendor…" value="${esc(poState.q)}" aria-label="Search">
+      <select id="pm" aria-label="Month"><option value="">All months</option>${monthsOf(S.pos.map(p => ({ m: p.issuedAt || p.createdAt })), 'm').map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('')}</select>
+      <label class="row" style="gap:6px;font-size:13px"><input type="checkbox" id="plate" style="width:18px;min-height:18px" ${poState.late ? 'checked' : ''}>Late only</label>
+      <button class="btn small" id="pexp">${ic('file')}Export Excel</button></div>
       ${isBuyer() && S.prs.some(p => p.status === 'Approved') ? `<div class="note warn" style="margin-bottom:12px">${S.prs.filter(p => p.status === 'Approved').length} approved PR(s) are waiting for a PO — see <a href="#board">Board</a>.</div>` : ''}
       <div class="card" style="padding:6px 10px"><div class="tbl-wrap"><table class="tbl" id="pt"></table></div></div>`;
-    $('#ps').value = poState.status;
+    $('#pm').value = poState.month;
     const draw = () => {
       const q = poState.q.toLowerCase();
-      const rows = S.pos.filter(p => (!poState.status || (poState.status === 'open' ? !['Closed', 'Cancelled'].includes(p.status) : poState.status === 'late' ? p.late : p.status === poState.status))
-        && (!q || [p.id, p.prId, p.vendorName, p.title].join(' ').toLowerCase().includes(q))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const base = S.pos.filter(p => (!poState.month || String(p.issuedAt || p.createdAt).slice(0, 7) === poState.month) && (!poState.late || p.late)
+        && (!q || [p.id, p.prId, p.vendorName, p.title, p.costCenter].join(' ').toLowerCase().includes(q)));
+      $('#potabs').innerHTML = PO_TABS.map(([k, l, f]) => `<button role="tab" data-t="${k}" class="${poState.tab === k ? 'on' : ''}" aria-selected="${poState.tab === k}">${l} <span class="n">${base.filter(f).length}</span></button>`).join('');
+      const rows = base.filter(PO_TABS.find(t => t[0] === poState.tab)[2]).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       $('#pt').innerHTML = `<thead><tr><th>PO</th><th>Title</th><th>Vendor</th><th>Status</th><th>Delivery</th><th class="r">Total</th></tr></thead><tbody>` +
         (rows.map(p => `<tr class="click" data-id="${esc(p.id)}"><td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:12px">${esc(p.prId)}</span></td><td>${esc(p.title)}</td><td>${esc(p.vendorName)}</td><td>${poChip(p)}</td><td>${fmtD(p.deliveryDate)}</td><td class="r"><b>${money(p.total, p.currency)}</b>${p.currency !== 'USD' ? `<br><span class="muted" style="font-size:12px">≈ ${usd(p.totalUSD)}</span>` : ''}</td></tr>`).join('')
-          || '<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">No purchase orders</td></tr>') + '</tbody>';
+          || '<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">No purchase orders in this view</td></tr>') + '</tbody>';
     };
+    $('#potabs').onclick = e => { const b = e.target.closest('button[data-t]'); if (b) { poState.tab = b.dataset.t; draw(); } };
     $('#pq').oninput = e => { poState.q = e.target.value; draw(); };
-    $('#ps').onchange = e => { poState.status = e.target.value; draw(); };
+    $('#pm').onchange = e => { poState.month = e.target.value; draw(); };
+    $('#plate').onchange = e => { poState.late = e.target.checked; draw(); };
+    $('#pexp').onclick = () => exportModal('po');
     $('#pt').onclick = e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = '#' + tr.dataset.id; };
     draw();
   }
@@ -364,28 +456,34 @@
     return lv.length ? lv : S.boot.rules.slice(0, 1);
   }
   async function prForm(id) {
-    let d = { title: '', department: me().department || (S.boot.departments[0] || {}).code, neededBy: '', currency: 'USD', reason: '', attachments: [] };
-    let items = [{ item: '', description: '', qty: 1, unit: '', unitPrice: '' }];
+    let d = { title: '', department: me().department || (S.boot.departments[0] || {}).code, neededBy: '', currency: 'USD', reason: '', attachments: [], priority: 'Normal', costCenter: '' };
+    let items = [{ item: '', description: '', qty: 1, unit: 'pc', unitPrice: '' }];
+    const isAdmin = me().role === 'Admin';
     if (id) {
       const r = await api('getPR', { id });
       if (!r.can.edit) { location.hash = '#' + id; return; }
-      d = { id, title: r.pr.title, department: r.pr.department, neededBy: r.pr.neededBy, currency: r.pr.currency, reason: r.reason, attachments: r.attachments };
+      d = { id, title: r.pr.title, department: r.pr.department, neededBy: r.pr.neededBy, currency: r.pr.currency, reason: r.reason, attachments: r.attachments, priority: r.pr.priority, costCenter: r.pr.costCenter };
       items = r.items.map(i => ({ item: i.item, description: i.description, qty: i.qty, unit: i.unit, unitPrice: i.unitPrice }));
       $('#pageTitle').textContent = 'Edit ' + id;
     } else {
       const draft = Store.get('prDraft'); if (draft && draft.items && draft.items.length) { d = { ...d, ...draft.d, id: '', attachments: (draft.d && draft.d.attachments) || [] }; items = draft.items; }
+      if (!isAdmin) d.department = me().department;
     }
+    if (!isAdmin && !me().department) { V().innerHTML = '<div class="empty">Your account has no department yet, so you can\'t open a PR.<br>Ask Admin to set your department in <b>Users</b>.</div>'; return; }
     let budget = S.budget && S.budget.department === d.department ? S.budget : null;
     V().innerHTML = `<form id="prf" class="stack" onsubmit="return false">
       <div class="card"><div class="grid2">
         <label class="field full">Title / purpose *<input name="title" value="${esc(d.title)}" placeholder="e.g. Stretch film & pallet labels" required></label>
-        <label class="field">Department<select name="department" ${seeAll() ? '' : 'disabled'}>${S.boot.departments.map(x => `<option value="${esc(x.code)}" ${x.code === d.department ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+        <label class="field">Department${isAdmin ? '' : ' (your department)'}<select name="department" ${isAdmin ? '' : 'disabled'}>${S.boot.departments.map(x => `<option value="${esc(x.code)}" ${x.code === d.department ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
         <label class="field">Needed by<input name="neededBy" type="date" value="${esc(d.neededBy)}"></label>
+        <label class="field">Priority<select name="priority"><option ${d.priority !== 'Urgent' ? 'selected' : ''}>Normal</option><option ${d.priority === 'Urgent' ? 'selected' : ''}>Urgent</option></select></label>
+        <label class="field">Cost center / project (optional)<select name="costCenter"><option value="">—</option>${(S.boot.costCenters || []).map(c => `<option value="${esc(c.code)}" ${c.code === d.costCenter ? 'selected' : ''}>${esc(c.code)} · ${esc(c.name)}</option>`).join('')}</select></label>
         <label class="field">Currency<select name="currency">${S.boot.currencies.map(c => `<option ${c.code === d.currency ? 'selected' : ''}>${esc(c.code)}</option>`).join('')}</select></label>
         <div class="field">Rate to USD<div id="rateTxt" style="padding:10px 0;color:var(--text);font-weight:500"></div></div>
         <label class="field full">Reason / note<textarea name="reason" rows="2" placeholder="Why is this needed?">${esc(d.reason)}</textarea></label>
       </div></div>
-      <div class="card"><div class="row between"><h2 style="margin:0">Items</h2><button type="button" class="btn small" id="addItem">${ic('plus')}Add item</button></div><div id="items"></div></div>
+      <div class="card"><div class="row between"><h2 style="margin:0">Items</h2><button type="button" class="btn small" id="addItem">${ic('plus')}Add item</button></div><div id="items"></div>
+        <datalist id="unitList">${(S.boot.units || []).map(u => `<option value="${esc(u)}">`).join('')}</datalist></div>
       <div class="card"><h2>Quotation / attachments</h2><div class="attach" id="att"></div><p class="muted" style="font-size:12px;margin:8px 0 0">Photos or PDF, up to ~5 MB each.</p></div>
       <div id="budgetBox"></div>
       <div class="actionbar">
@@ -399,7 +497,7 @@
       $('#items').innerHTML = items.map((it, i) => `<div class="item-row" data-i="${i}">
         <label class="field f-item">Item *<input data-k="item" value="${esc(it.item)}" placeholder="What to buy"></label>
         <label class="field">Qty<input data-k="qty" type="number" min="0" step="any" inputmode="decimal" value="${esc(it.qty)}"></label>
-        <label class="field">Unit<input data-k="unit" value="${esc(it.unit)}" placeholder="pc"></label>
+        <label class="field">Unit (pc, box, kg…)<input data-k="unit" list="unitList" value="${esc(it.unit)}" placeholder="pc" autocomplete="off"></label>
         <label class="field">Unit price<input data-k="unitPrice" type="number" min="0" step="any" inputmode="decimal" value="${esc(it.unitPrice)}" placeholder="0.00"></label>
         <div class="amt" data-amt>${money((+it.qty || 0) * (+it.unitPrice || 0), cur())}</div>
         <button type="button" class="icon-btn" data-del="${i}" aria-label="Remove item" ${items.length < 2 ? 'disabled' : ''}>${ic('trash')}</button>
@@ -431,11 +529,12 @@
       items.forEach((it, i) => { const el = $(`#items [data-i="${i}"] [data-amt]`); if (el) el.textContent = money((+it.qty || 0) * (+it.unitPrice || 0), cur()); });
       if (!id) Store.set('prDraft', { d: { ...collect(), attachments: d.attachments }, items });
     };
-    const collect = () => ({ id: d.id || '', title: f.title.value, department: f.department.value, neededBy: f.neededBy.value, currency: cur(), reason: f.reason.value, attachments: d.attachments });
+    const collect = () => ({ id: d.id || '', title: f.title.value, department: f.department.value, neededBy: f.neededBy.value, currency: cur(), reason: f.reason.value, attachments: d.attachments, priority: f.priority.value, costCenter: f.costCenter.value });
     $('#items').addEventListener('input', e => { const row = e.target.closest('[data-i]'); if (!row) return; items[+row.dataset.i][e.target.dataset.k] = e.target.value; totals(); });
+    $('#items').addEventListener('change', e => { if (e.target.dataset.k === 'unit' && /^[\d.,\s]+$/.test(e.target.value)) toast('Unit should be a unit like pc, box or kg — put the number in Qty', true); });
     $('#items').addEventListener('click', e => { const b = e.target.closest('[data-del]'); if (b && items.length > 1) { items.splice(+b.dataset.del, 1); drawItems(); totals(); } });
     $('#att').addEventListener('click', e => { const b = e.target.closest('[data-rm]'); if (b) { d.attachments.splice(+b.dataset.rm, 1); drawAtt(); totals(); } });
-    $('#addItem').onclick = () => { items.push({ item: '', description: '', qty: 1, unit: '', unitPrice: '' }); drawItems(); totals(); const r = $('#items').lastElementChild; if (r) r.querySelector('input').focus(); };
+    $('#addItem').onclick = () => { items.push({ item: '', description: '', qty: 1, unit: 'pc', unitPrice: '' }); drawItems(); totals(); const r = $('#items').lastElementChild; if (r) r.querySelector('input').focus(); };
     f.addEventListener('input', e => { if (!e.target.closest('#items')) totals(); });
     f.department.onchange = async () => { budget = null; totals(); const b = await run(null, () => api('budget', { department: f.department.value })); if (b) { budget = b; totals(); } };
     const save = async (btn, submit) => {
@@ -482,11 +581,13 @@
             <div class="kv"><span>Needed by</span><b>${fmtD(p.neededBy) || '—'}</b></div>
             <div class="kv"><span>Total</span><b style="font-size:16px">${money(p.totalAmount, p.currency)}</b></div>
             ${p.currency !== 'USD' ? `<div class="kv"><span>In USD (rate ${r.rateToUSD})</span><b>≈ ${usd(p.totalUSD)}</b></div>` : ''}
-            <div class="kv"><span>Created</span><b>${fmtDT(p.createdAt)}</b></div></div>
+            <div class="kv"><span>Created</span><b>${fmtDT(p.createdAt)}</b></div>
+            <div class="kv"><span>Priority</span><b>${p.priority === 'Urgent' ? chip('Urgent', 'red') : 'Normal'}</b></div>
+            ${p.costCenter ? `<div class="kv"><span>Cost center</span><b>${esc(r.costCenterName || p.costCenter)}</b></div>` : ''}</div>
           ${r.reason ? `<p style="margin:12px 0 0;white-space:pre-line">${esc(r.reason)}</p>` : ''}</div>
-        <div class="card"><h2>Items (${r.items.length})</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Amount</th><th>PO</th></tr></thead><tbody>
-          ${r.items.map(i => { const po = i.poId && poById[i.poId] && poById[i.poId].status !== 'Cancelled' ? poById[i.poId] : null; return `<tr><td><b>${esc(i.item)}</b>${i.description ? `<br><span class="muted" style="font-size:12px">${esc(i.description)}</span>` : ''}</td><td class="r">${esc(i.qty)} ${esc(i.unit)}</td><td class="r">${money(i.unitPrice, p.currency)}</td><td class="r"><b>${money(i.amount, p.currency)}</b></td><td>${po ? `<a href="#${esc(po.id)}">${esc(po.id)}</a>` : '<span class="muted">—</span>'}</td></tr>`; }).join('')}
-          </tbody><tfoot><tr><td colspan="3" class="r">Total</td><td class="r">${money(p.totalAmount, p.currency)}</td><td></td></tr></tfoot></table></div></div>
+        <div class="card"><h2>Items (${r.items.length})</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th><th>PO</th></tr></thead><tbody>
+          ${r.items.map(i => { const po = i.poId && poById[i.poId] && poById[i.poId].status !== 'Cancelled' ? poById[i.poId] : null; return `<tr><td><b>${esc(i.item)}</b>${i.description ? `<br><span class="muted" style="font-size:12px">${esc(i.description)}</span>` : ''}</td><td class="r">${esc(i.qty)}</td><td>${esc(i.unit)}</td><td class="r">${money(i.unitPrice, p.currency)}</td><td class="r"><b>${money(i.amount, p.currency)}</b></td><td>${po ? `<a href="#${esc(po.id)}">${esc(po.id)}</a>` : '<span class="muted">—</span>'}</td></tr>`; }).join('')}
+          </tbody><tfoot><tr><td colspan="4" class="r">Total</td><td class="r">${money(p.totalAmount, p.currency)}</td><td></td></tr></tfoot></table></div></div>
         ${r.attachments.length ? `<div class="card"><h2>Attachments</h2><div class="attach">${r.attachments.map(a => `<a href="${esc(fileHref(a.url))}" target="_blank" rel="noopener">${ic('clip')}${esc(a.name)}</a>`).join('')}</div></div>` : ''}
         ${r.pos.length ? `<div><div class="section-title"><h2>Purchase orders</h2></div>${listOrEmpty(r.pos, poCard, '')}</div>` : ''}
       </div>
@@ -502,13 +603,19 @@
     if (r.can.edit && p.status !== 'Pending Approval') a.push('<button class="btn primary" data-a="submit">' + ic('send') + 'Submit for approval</button>');
     if (r.can.createPO) a.push(`<a class="btn primary" href="#newpo-${esc(p.id)}">${ic('po')}Create PO</a>`);
     if (r.can.cancel) a.push('<button class="btn danger" data-a="cancel">Cancel PR</button>');
+    if (r.can.copy && !r.can.approve) a.push('<button class="btn" data-a="copy">' + ic('file') + 'Copy as new PR</button>');
     if (!a.length) $('#prActs').remove(); else $('#prActs').innerHTML = a.join('');
     const acts = $('#prActs');
     if (acts) acts.onclick = async e => {
       const b = e.target.closest('[data-a]'); if (!b) return;
       const act = b.dataset.a;
+      if (act === 'copy') {
+        Store.set('prDraft', { d: { title: p.title, currency: p.currency, reason: r.reason, priority: p.priority, costCenter: p.costCenter, neededBy: '', attachments: [] },
+          items: r.items.map(i => ({ item: i.item, description: i.description, qty: i.qty, unit: i.unit, unitPrice: i.unitPrice })) });
+        toast('Copied — check quantities and prices, then submit'); location.hash = '#new-pr'; return;
+      }
       if (act === 'submit') {
-        const res = await run(b, () => api('savePR', { pr: { id: p.id, title: p.title, department: p.department, neededBy: p.neededBy, currency: p.currency, reason: r.reason, attachments: r.attachments }, items: r.items, submit: true }));
+        const res = await run(b, () => api('savePR', { pr: { id: p.id, title: p.title, department: p.department, neededBy: p.neededBy, currency: p.currency, reason: r.reason, attachments: r.attachments, priority: p.priority, costCenter: p.costCenter }, items: r.items, submit: true }));
         if (res) { toast('Submitted for approval'); await refresh(true, true); route(); }
         return;
       }
@@ -552,7 +659,7 @@
           <label class="field">VAT %<input name="vatPct" type="number" min="0" max="100" step="any" inputmode="decimal" value="${esc(d.vatPct)}"></label>
           <label class="field" style="grid-column:span 2">Note on PO<input name="note" value="${esc(d.note)}" placeholder="Optional"></label>
         </div></div>
-        <div class="card"><h2>Items — final price from vendor</h2><div class="tbl-wrap"><table class="tbl" style="min-width:560px"><thead><tr><th>Include</th><th>Item</th><th>Qty</th><th class="r">PR estimate</th><th>Unit price (<span class="curLbl"></span>)</th><th class="r">Amount</th></tr></thead><tbody id="poLines"></tbody></table></div>
+        <div class="card"><h2>Items — final price from vendor</h2><div class="tbl-wrap"><table class="tbl" style="min-width:560px"><thead><tr><th>Include</th><th>Item</th><th>Qty</th><th>Unit</th><th class="r">PR estimate</th><th>Unit price (<span class="curLbl"></span>)</th><th class="r">Amount</th></tr></thead><tbody id="poLines"></tbody></table></div>
           <p class="muted" style="font-size:12px;margin:8px 0 0">Untick an item to leave it for another PO (e.g. a different vendor).</p></div>
       </div>
       <div class="narrow stack"><div class="card"><h2>Summary</h2>
@@ -571,7 +678,7 @@
       $('#poLines').innerHTML = lines.map((l, i) => `<tr data-i="${i}">
         <td><input type="checkbox" data-k="include" ${l.include ? 'checked' : ''} aria-label="Include ${esc(l.item)}" style="width:20px;min-height:20px"></td>
         <td><b>${esc(l.item)}</b></td>
-        <td><input data-k="qty" type="number" min="0" step="any" value="${esc(l.qty)}" style="width:80px"> ${esc(l.unit)}</td>
+        <td><input data-k="qty" type="number" min="0" step="any" value="${esc(l.qty)}" style="width:80px"></td><td>${esc(l.unit)}</td>
         <td class="r muted">${money(l.prPrice, pr.pr.currency)}</td>
         <td><input data-k="unitPrice" type="number" min="0" step="any" value="${esc(l.unitPrice === null ? defPrice(l) : l.unitPrice)}" style="width:120px"></td>
         <td class="r"><b data-amt></b></td></tr>`).join('');
@@ -619,10 +726,10 @@
           <div class="kv"><span>Department</span><b>${esc(deptName(p.department))}</b></div><div class="kv"><span>Created by</span><b>${esc(p.createdByName)}</b></div>
           <div class="kv"><span>Issued</span><b>${fmtDT(p.issuedAt) || '—'}</b></div>${v.phone || v.email ? `<div class="kv"><span>Vendor contact</span><b>${esc([v.contact, v.phone, v.email].filter(Boolean).join(' · '))}</b></div>` : ''}
         </div>${r.note ? `<p style="margin:12px 0 0">${esc(r.note)}</p>` : ''}</div>
-      <div class="card"><h2>Items</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Amount</th><th class="r">Received</th></tr></thead><tbody>
-        ${r.items.map(i => `<tr><td><b>${esc(i.item)}</b></td><td class="r">${esc(i.qty)} ${esc(i.unit)}</td><td class="r">${money(i.unitPrice, p.currency)}</td><td class="r">${money(i.amount, p.currency)}</td><td class="r">${i.receivedQty >= i.qty ? chip(i.receivedQty + ' / ' + i.qty, 'green') : i.receivedQty ? chip(i.receivedQty + ' / ' + i.qty, 'amber') : '<span class="muted">0 / ' + esc(i.qty) + '</span>'}</td></tr>`).join('')}
-      </tbody><tfoot><tr><td colspan="3" class="r">Subtotal</td><td class="r">${money(r.subtotal, p.currency)}</td><td></td></tr><tr><td colspan="3" class="r">VAT ${esc(r.vatPct)}%</td><td class="r">${money(r.vatAmount, p.currency)}</td><td></td></tr>
-      <tr><td colspan="3" class="r" style="font-size:16px">Total</td><td class="r" style="font-size:16px">${money(p.total, p.currency)}</td><td class="muted" style="font-weight:400">${p.currency !== 'USD' ? '≈ ' + usd(p.totalUSD) : ''}</td></tr></tfoot></table></div></div>
+      <div class="card"><h2>Items</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th><th class="r">Received</th></tr></thead><tbody>
+        ${r.items.map(i => `<tr><td><b>${esc(i.item)}</b></td><td class="r">${esc(i.qty)}</td><td>${esc(i.unit)}</td><td class="r">${money(i.unitPrice, p.currency)}</td><td class="r">${money(i.amount, p.currency)}</td><td class="r">${i.receivedQty >= i.qty ? chip(i.receivedQty + ' / ' + i.qty, 'green') : i.receivedQty ? chip(i.receivedQty + ' / ' + i.qty, 'amber') : '<span class="muted">0 / ' + esc(i.qty) + '</span>'}</td></tr>`).join('')}
+      </tbody><tfoot><tr><td colspan="4" class="r">Subtotal</td><td class="r">${money(r.subtotal, p.currency)}</td><td></td></tr><tr><td colspan="4" class="r">VAT ${esc(r.vatPct)}%</td><td class="r">${money(r.vatAmount, p.currency)}</td><td></td></tr>
+      <tr><td colspan="4" class="r" style="font-size:16px">Total</td><td class="r" style="font-size:16px">${money(p.total, p.currency)}</td><td class="muted" style="font-weight:400">${p.currency !== 'USD' ? '≈ ' + usd(p.totalUSD) : ''}</td></tr></tfoot></table></div></div>
     </div><div class="narrow stack">
       ${r.can.pdf ? `<div class="card"><h2>PO document</h2><div class="stack" style="gap:8px">${Api.demo ? '<button class="btn primary block" data-a="preview">' + ic('file') + 'View PO</button>' : (p.pdfUrl ? `<a class="btn primary block" href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">${ic('file')}Open / download PDF</a>` : '<div class="note warn">PDF not created yet</div>')}${isBuyer() ? '<button class="btn block" data-a="pdf">Re-create PDF</button>' : ''}</div></div>` : ''}
       ${r.pr ? `<div><div class="section-title"><h2>Purchase request</h2></div>${prCard(r.pr)}</div>` : ''}
@@ -652,8 +759,8 @@
   function receiveModal(r) {
     const open = r.items.filter(i => i.receivedQty < i.qty);
     openModal('Receive goods · ' + r.po.id, `<p class="muted" style="margin-top:0">Enter what arrived now. You can receive the rest later.</p>
-      <table class="tbl"><thead><tr><th>Item</th><th class="r">Remaining</th><th>Received now</th></tr></thead><tbody>
-      ${open.map(i => `<tr><td>${esc(i.item)}</td><td class="r">${i.qty - i.receivedQty} ${esc(i.unit)}</td><td><input type="number" min="0" step="any" data-line="${i.line}" value="${i.qty - i.receivedQty}" style="width:100px"></td></tr>`).join('')}
+      <table class="tbl"><thead><tr><th>Item</th><th class="r">Remaining</th><th>Unit</th><th>Received now</th></tr></thead><tbody>
+      ${open.map(i => `<tr><td>${esc(i.item)}</td><td class="r">${i.qty - i.receivedQty}</td><td>${esc(i.unit)}</td><td><input type="number" min="0" step="any" data-line="${i.line}" value="${i.qty - i.receivedQty}" style="width:100px"></td></tr>`).join('')}
       </tbody></table><label class="field" style="margin-top:12px">Note (delivery note no., condition…)<input id="rcvNote"></label>`,
     '<button class="btn" id="rcvNo">Back</button><button class="btn primary" id="rcvYes">Confirm receipt</button>');
     $('#rcvNo').onclick = closeModal;
@@ -685,6 +792,7 @@
           ${d.aging.map(a => `<tr class="click" data-id="${esc(a.docId)}"><td><b>${esc(a.docId)}</b></td><td>${esc(a.title)}</td><td>${esc(a.waitingOn)}</td><td>${chip(ageTxt(a.ageDays), a.ageDays >= 3 || a.kind === 'late' ? 'red' : a.ageDays >= 1 ? 'amber' : '')}</td><td class="r">${usd(a.amountUSD)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">Nothing waiting 🎉</td></tr>'}
         </tbody></table></div></div>
       </div>
+      ${(d.costCenters || []).length ? `<div class="card"><h2>Spend by cost center · this month</h2>${d.costCenters.map(c => `<div style="margin-bottom:10px"><div class="row between" style="font-size:13px"><span>${esc(c.name)}</span><b>${usd(c.usd)}</b></div><div class="bar" style="margin-top:4px"><i style="width:${c.usd / Math.max(1, ...d.costCenters.map(x => x.usd)) * 100}%"></i></div></div>`).join('')}</div>` : ''}
       <div class="card"><h2>Spend by vendor · this month</h2>${d.vendors.length ? d.vendors.map(v => `<div style="margin-bottom:10px"><div class="row between" style="font-size:13px"><span>${esc(v.name)}</span><b>${usd(v.usd)}</b></div><div class="bar" style="margin-top:4px"><i style="width:${v.usd / maxV * 100}%"></i></div></div>`).join('') : '<div class="muted">No POs issued this month yet</div>'}</div>
     </div>`;
     $('#agingT').onclick = e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = '#' + tr.dataset.id; };
@@ -744,7 +852,7 @@
           <td><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''} aria-label="Active" style="width:20px;min-height:20px"></td>
           <td data-pin><button class="btn small" data-resetpin>Reset PIN</button></td></tr>`).join('')}
         </tbody></table></div>
-        <p class="muted" style="font-size:12px;margin:8px 0 0">Roles: <b>Requester</b> opens PRs · <b>DeptHead</b> approves step 1 for their department · <b>Manager</b> step 2 (≥ $500) and PO over-amount · <b>Executive</b> step 3 (≥ $5,000) · <b>Purchasing</b> issues POs · <b>Store</b> receives goods · <b>Admin</b> everything. Limits are in the ApprovalRules sheet.</p></div>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">Roles: <b>Requester</b> opens PRs · <b>DeptHead</b> approves step 1 for their department · <b>Manager</b> step 2 (≥ $500) and PO over-amount · <b>MD</b> final step (≥ $5,000) and PO over-amount · <b>Purchasing</b> issues POs · <b>Store</b> receives goods · <b>Admin</b> everything. Limits are in the ApprovalRules sheet. Everyone except Admin needs a <b>department</b> to open PRs — they can only request for their own department.</p></div>
         <div class="card"><h2>Add user</h2><form id="nu" class="grid3" onsubmit="return false">
           <label class="field">Username (login)<input name="username" autocapitalize="none" placeholder="e.g. sokha"></label><label class="field">Display name<input name="name" placeholder="Sokha Chan"></label>
           <label class="field">Starting PIN (4-8 digits)<input name="pin" inputmode="numeric"></label>

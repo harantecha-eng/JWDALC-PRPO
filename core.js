@@ -20,11 +20,11 @@ var PRPO = (function () {
     Vendors: ['code', 'name', 'contact', 'phone', 'email', 'address', 'taxId', 'paymentTerms', 'currency', 'active'],
     PR: ['id', 'title', 'requester', 'requesterName', 'department', 'neededBy', 'currency', 'rateToUSD', 'totalAmount', 'totalUSD',
       'status', 'requiredLevels', 'currentLevel', 'reason', 'attachments', 'createdAt', 'submittedAt', 'approvedAt',
-      'lastActionAt', 'lastRemindedAt', 'updatedAt', 'updatedBy'],
+      'lastActionAt', 'lastRemindedAt', 'updatedAt', 'updatedBy', 'priority', 'costCenter'],
     PRItems: ['prId', 'line', 'item', 'description', 'qty', 'unit', 'unitPrice', 'amount', 'poId'],
     PO: ['id', 'prId', 'title', 'vendorCode', 'vendorName', 'department', 'currency', 'rateToUSD', 'subtotal', 'vatPct', 'vatAmount',
       'total', 'totalUSD', 'paymentTerms', 'deliveryDate', 'deliverTo', 'note', 'status', 'createdBy', 'createdByName',
-      'createdAt', 'issuedAt', 'updatedAt', 'pdfUrl'],
+      'createdAt', 'issuedAt', 'updatedAt', 'pdfUrl', 'costCenter'],
     POItems: ['poId', 'line', 'prLine', 'item', 'qty', 'unit', 'unitPrice', 'amount', 'receivedQty'],
     Log: ['time', 'user', 'action', 'docId', 'details'],
     Notifications: ['id', 'username', 'time', 'type', 'title', 'body', 'docId', 'read'],
@@ -32,17 +32,20 @@ var PRPO = (function () {
     Sessions: ['token', 'username', 'exp'],
     Counters: ['key', 'value'],
     TelegramLinks: ['code', 'username', 'exp'],
+    CostCenters: ['code', 'name', 'active'],
   };
+  var DEFAULT_UNITS = 'pc,box,carton,pallet,set,roll,ream,kg,liter,pack,lot,trip,month';
 
-  var ROLES = ['Requester', 'DeptHead', 'Manager', 'Executive', 'Purchasing', 'Store', 'Admin'];
-  var SEE_ALL = ['Manager', 'Executive', 'Purchasing', 'Store', 'Admin'];
-  var PO_APPROVERS = ['Manager', 'Executive', 'Admin'];
+  var ROLES = ['Requester', 'DeptHead', 'Manager', 'MD', 'Purchasing', 'Store', 'Admin'];
+  var SEE_ALL = ['Manager', 'MD', 'Purchasing', 'Store', 'Admin'];
+  var PO_APPROVERS = ['Manager', 'MD', 'Admin'];
   var PR_ST = { DRAFT: 'Draft', PENDING: 'Pending Approval', RETURNED: 'Returned', REJECTED: 'Rejected', APPROVED: 'Approved', ORDERED: 'Ordered', CLOSED: 'Closed', CANCELLED: 'Cancelled' };
   var PO_ST = { DRAFT: 'Draft', PENDING: 'Pending Approval', ISSUED: 'Issued', PARTIAL: 'Partially Received', RECEIVED: 'Received', CLOSED: 'Closed', CANCELLED: 'Cancelled' };
   var PO_LIVE = [PO_ST.ISSUED, PO_ST.PARTIAL, PO_ST.RECEIVED, PO_ST.CLOSED];
   var SESSION_DAYS = 14, MAX_FAILS = 5;
 
   // ---------- small helpers ----------
+  function roleOf(r) { r = str(r); return r === 'Executive' ? 'MD' : (r || 'Requester'); } // 'Executive' = old name of MD
   function str(v) { return v === undefined || v === null ? '' : String(v).trim(); }
   function num(v) { var n = Number(str(v).replace(/,/g, '')); return isFinite(n) ? n : 0; }
   function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -66,14 +69,14 @@ var PRPO = (function () {
 
     function settings() {
       var o = { companyName: '', companyAddress: '', companyTaxId: '', companyPhone: '', appUrl: '', telegramBotUsername: '',
-        reminderHours: '48', poTolerancePct: '0', defaultVatPct: '10', defaultDeliverTo: '' };
+        reminderHours: '48', urgentReminderHours: '24', poTolerancePct: '0', defaultVatPct: '10', defaultDeliverTo: '', units: DEFAULT_UNITS };
       all('Settings').forEach(function (r) { if (r.key) o[r.key] = str(r.value); });
       return o;
     }
     function rates() { var o = {}; all('Currencies').forEach(function (c) { o[c.code] = num(c.rateToUSD); }); return o; }
     function rateOf(code) { var r = rates()[code]; if (!r) fail('Unknown currency: ' + code); return r; }
     function rules() {
-      return all('ApprovalRules').map(function (r) { return { level: num(r.level), minUSD: num(r.minUSD), approverRole: str(r.approverRole), label: str(r.label) || str(r.approverRole) }; })
+      return all('ApprovalRules').map(function (r) { return { level: num(r.level), minUSD: num(r.minUSD), approverRole: roleOf(r.approverRole), label: str(r.label) || roleOf(r.approverRole) }; })
         .filter(function (r) { return r.level > 0; }).sort(function (a, b) { return a.level - b.level; });
     }
     function ruleOf(level) { var l = num(level); return rules().filter(function (r) { return r.level === l; })[0] || null; }
@@ -92,7 +95,7 @@ var PRPO = (function () {
     // ---------- users & sessions ----------
     function users() {
       return all('Users').map(function (u) {
-        return { username: str(u.username).toLowerCase(), name: str(u.name) || str(u.username), role: str(u.role) || 'Requester',
+        return { username: str(u.username).toLowerCase(), name: str(u.name) || str(u.username), role: roleOf(u.role),
           department: str(u.department), email: str(u.email), telegramChatId: str(u.telegramChatId),
           pinHash: str(u.pinHash), salt: str(u.salt), active: bool(u.active), lastLogin: str(u.lastLogin) };
       });
@@ -139,6 +142,9 @@ var PRPO = (function () {
             var bad = svc.push(toks, { title: n.title, body: n.body || '', url: link, tag: n.docId || '' }) || [];
             bad.forEach(function (b) { db.remove('PushTokens', function (t) { return t.token === b; }); });
           }
+        } catch (e) { /* keep going */ }
+        try {
+          if (n.email && u.email && svc.email) { var m = n.email(u); if (m) svc.email(u.email, m.subject, m.html); }
         } catch (e) { /* keep going */ }
       });
     }
@@ -194,13 +200,91 @@ var PRPO = (function () {
       return { id: p.id, title: p.title, requester: p.requester, requesterName: p.requesterName, department: p.department, neededBy: p.neededBy,
         currency: p.currency, totalAmount: num(p.totalAmount), totalUSD: num(p.totalUSD), status: p.status, currentLevel: p.currentLevel,
         waitingOn: waitingOn(p), createdAt: p.createdAt, submittedAt: p.submittedAt, approvedAt: p.approvedAt, lastActionAt: p.lastActionAt,
-        canApprove: canApprovePR(u, p) };
+        priority: p.priority === 'Urgent' ? 'Urgent' : 'Normal', costCenter: p.costCenter || '', canApprove: canApprovePR(u, p) };
     }
     function poRow(p) {
       var late = [PO_ST.ISSUED, PO_ST.PARTIAL].indexOf(p.status) >= 0 && p.deliveryDate && p.deliveryDate < today();
       return { id: p.id, prId: p.prId, title: p.title, vendorName: p.vendorName, department: p.department, currency: p.currency, total: num(p.total),
         totalUSD: num(p.totalUSD), status: p.status, deliveryDate: p.deliveryDate, issuedAt: p.issuedAt, createdAt: p.createdAt, updatedAt: p.updatedAt,
-        createdByName: p.createdByName, pdfUrl: p.pdfUrl, late: !!late };
+        createdByName: p.createdByName, pdfUrl: p.pdfUrl, costCenter: p.costCenter || '', late: !!late };
+    }
+
+    // ---------- emails (approval requests, results) ----------
+    function urgentTag(pr) { return pr.priority === 'Urgent' ? '[URGENT] ' : ''; }
+    function ccName(code) { var c = find('CostCenters', function (x) { return x.code === code; }); return c ? (c.name ? c.code + ' · ' + c.name : c.code) : code; }
+    function deptName(code) { var d = find('Departments', function (x) { return x.code === code; }); return d ? (d.name || d.code) : code; }
+    function appLink(hash) { var a = settings().appUrl.replace(/#.*$/, ''); return a ? a + (hash ? '#' + hash : '') : ''; }
+    function chainOf(pr) {
+      var logs = all('Log').filter(function (l) { return l.docId === pr.id && l.time >= str(pr.submittedAt); });
+      var names = {}; users().forEach(function (x) { names[x.username] = x.name; });
+      return str(pr.requiredLevels).split(',').filter(Boolean).map(function (lv) {
+        var r = ruleOf(lv), d = logs.filter(function (l) { return l.action === 'APPROVE L' + lv; })[0];
+        return { label: r ? r.label : 'Level ' + lv, state: d ? 'done' : (pr.status === PR_ST.PENDING && str(pr.currentLevel) === str(lv) ? 'now' : 'next'), by: d ? (names[d.user] || d.user) : '', time: d ? d.time : '' };
+      });
+    }
+    function prEmail(pr, o) {
+      var items = prItems(pr.id), b = o.budget ? budgetInfo(pr.department) : null;
+      var row = function (k, v, style) { return '<tr><td style="padding:4px 0;color:#5b6676;width:38%">' + esc(k) + '</td><td style="padding:4px 0;' + (style || '') + '">' + v + '</td></tr>'; };
+      var link = appLink(o.hash || pr.id);
+      var h = '<div style="font-family:Arial,Helvetica,sans-serif;color:#1c2430;max-width:620px;font-size:14px">' +
+        (o.banner ? '<div style="background:' + o.bannerBg + ';color:' + o.bannerFg + ';padding:12px 14px;border-radius:8px;font-weight:bold;margin-bottom:12px">' + esc(o.banner) + '</div>' : '') +
+        '<p style="margin:0 0 12px">Hi ' + esc(o.name) + ', ' + esc(o.intro) + '</p>' +
+        (o.comment ? '<div style="border-left:4px solid ' + (o.commentColor || '#b42318') + ';background:#f6f7f9;padding:10px 12px;margin:0 0 12px"><b>' + esc(o.commentBy) + ':</b> "' + esc(o.comment) + '"</div>' : '') +
+        '<div style="border:1px solid #e2e6ee;border-radius:8px;padding:12px 14px">' +
+        '<div style="font-size:12px;color:#5b6676">' + esc(pr.id) + (pr.priority === 'Urgent' ? ' &nbsp;<span style="background:#fde4e4;color:#b42318;padding:1px 8px;border-radius:10px;font-weight:bold">URGENT</span>' : '') + '</div>' +
+        '<div style="font-size:17px;font-weight:bold;margin:2px 0 8px">' + esc(pr.title) + '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+        row('Requested by', esc(pr.requesterName) + ' · ' + esc(deptName(pr.department))) +
+        row('Total', '<b>' + esc(money(pr.totalAmount, pr.currency)) + '</b>' + (pr.currency !== 'USD' ? ' <span style="color:#5b6676">(≈ USD ' + money(pr.totalUSD) + ')</span>' : '')) +
+        (pr.neededBy ? row('Needed by', esc(pr.neededBy)) : '') +
+        (pr.costCenter ? row('Cost center', esc(ccName(pr.costCenter))) : '') +
+        (pr.reason ? row('Reason', esc(pr.reason)) : '') +
+        (b && b.budgetUSD ? row('Department budget', b.pct + '% used incl. requests in approval', b.pct > 85 ? 'color:#c2410c;font-weight:bold' : '') : '') +
+        '</table>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:10px"><tr style="color:#5b6676"><td style="padding:4px 0;border-bottom:1px solid #e2e6ee">Item</td><td style="border-bottom:1px solid #e2e6ee;text-align:right">Qty</td><td style="border-bottom:1px solid #e2e6ee;padding-left:8px">Unit</td><td style="border-bottom:1px solid #e2e6ee;text-align:right">Amount</td></tr>' +
+        items.map(function (i) { return '<tr><td style="padding:5px 0;border-bottom:1px solid #f0f2f5">' + esc(i.item) + '</td><td style="text-align:right;border-bottom:1px solid #f0f2f5">' + esc(i.qty) + '</td><td style="padding-left:8px;border-bottom:1px solid #f0f2f5">' + esc(i.unit) + '</td><td style="text-align:right;border-bottom:1px solid #f0f2f5">' + money(i.amount) + '</td></tr>'; }).join('') +
+        '</table></div>';
+      if (o.chain) {
+        h += '<p style="margin:14px 0 6px;font-weight:bold;font-size:13px">Approval chain</p>' + chainOf(pr).map(function (c, k) {
+          var col = c.state === 'done' ? '#1d7a52' : c.state === 'now' ? '#8a5a00' : '#8a94a3';
+          var txt = c.state === 'done' ? 'approved by ' + c.by + ' · ' + c.time.slice(0, 16) : c.state === 'now' ? (o.nowIsYou ? 'you · waiting' : 'waiting') : 'next';
+          return '<div style="font-size:13px;color:' + col + ';margin:2px 0">' + (c.state === 'done' ? '✔' : c.state === 'now' ? '●' : '○') + ' ' + (k + 1) + '. ' + esc(c.label) + ' · ' + esc(txt) + '</div>';
+        }).join('');
+      }
+      if (link) h += '<p style="margin:16px 0 6px"><a href="' + esc(link) + '" style="background:' + (o.color || '#1f3a5f') + ';color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block;font-weight:bold">' + esc(o.button || 'Open in app') + '</a></p>';
+      if (o.footer) h += '<p style="font-size:11px;color:#8a94a3;margin-top:14px">' + esc(o.footer) + '</p>';
+      return h + '</div>';
+    }
+    function notifyApprovers(pr, level, reminderDays) {
+      var lv = str(pr.requiredLevels).split(','), idx = lv.indexOf(str(level)), r = ruleOf(level);
+      var title = urgentTag(pr) + (reminderDays ? 'Reminder: ' + pr.id + ' is still waiting (' + reminderDays + (reminderDays > 1 ? ' days)' : ' day)') : 'Approval needed: ' + pr.id);
+      notify(approversFor(pr, level), {
+        type: reminderDays ? 'reminder' : 'approval', title: title, docId: pr.id,
+        body: pr.title + ' · ' + money(pr.totalAmount, pr.currency) + ' from ' + pr.requesterName,
+        email: function (u) {
+          return { subject: title + ' · ' + pr.title + ' · ' + money(pr.totalAmount, pr.currency),
+            html: prEmail(pr, { name: u.name, chain: true, budget: true, nowIsYou: true, button: 'Review and approve', color: '#1d7a52',
+              intro: (reminderDays ? 'this purchase request has been waiting ' + reminderDays + (reminderDays > 1 ? ' days' : ' day') + ' for your approval' : 'a purchase request is waiting for your approval') + ' (step ' + (idx + 1) + ' of ' + lv.length + ').',
+              footer: 'You are receiving this because you approve step ' + (idx + 1) + (r ? ' (' + r.label + ')' : '') + ' for purchase requests. Open the app to approve, send back or reject.' }) };
+        },
+      });
+    }
+    function notifyResult(pr, kind, comment, by) {
+      var K = {
+        approved: { type: 'approved', title: 'PR approved: ', body: pr.title + ' was approved. Purchasing will issue the PO.', banner: 'Approved — all approval steps are complete', bg: '#e3f4ec', fg: '#1d7a52',
+          intro: 'your purchase request was fully approved. Purchasing will now issue the PO.', button: 'View PR', color: '#1f3a5f' },
+        returned: { type: 'returned', title: 'Sent back for changes: ', body: '"' + comment + '" — ' + by, banner: 'Sent back for changes', bg: '#fff2cc', fg: '#8a5a00',
+          intro: by + ' sent your purchase request back. Please update it and submit again.', button: 'Edit and resubmit', color: '#1f3a5f', hash: 'edit-' + pr.id, cc: '#b45309' },
+        rejected: { type: 'rejected', title: 'Rejected: ', body: '"' + comment + '" — ' + by, banner: 'Rejected', bg: '#fde4e4', fg: '#b42318',
+          intro: by + ' rejected your purchase request.', button: 'View PR', color: '#1f3a5f', cc: '#b42318' },
+      }[kind];
+      var title = urgentTag(pr) + K.title + pr.id;
+      notify([pr.requester], { type: K.type, title: title, body: K.body, docId: pr.id,
+        email: function (u) {
+          return { subject: title + ' · ' + pr.title,
+            html: prEmail(pr, { name: u.name, intro: K.intro, banner: K.banner, bannerBg: K.bg, bannerFg: K.fg, comment: comment, commentBy: by, commentColor: K.cc,
+              chain: kind === 'approved', button: K.button, color: K.color, hash: K.hash, footer: 'You are receiving this because you opened this purchase request.' }) };
+        } });
     }
 
     // ---------- budget ----------
@@ -231,6 +315,8 @@ var PRPO = (function () {
         departments: all('Departments').filter(function (d) { return d.active === '' || bool(d.active); }).map(function (d) { return { code: d.code, name: d.name || d.code, monthlyBudgetUSD: num(d.monthlyBudgetUSD) }; }),
         currencies: all('Currencies').map(function (c) { return { code: c.code, rateToUSD: num(c.rateToUSD), updatedAt: c.updatedAt }; }),
         rules: rules(),
+        units: str(st.units || DEFAULT_UNITS).split(',').map(function (x) { return x.trim(); }).filter(Boolean),
+        costCenters: all('CostCenters').filter(function (c) { return c.code && (c.active === '' || bool(c.active)); }).map(function (c) { return { code: c.code, name: c.name || c.code }; }),
         vendors: all('Vendors').filter(function (v) { return v.active === '' || bool(v.active); }).map(function (v) {
           return { code: v.code, name: v.name, contact: v.contact, phone: v.phone, email: v.email, address: v.address, taxId: v.taxId, paymentTerms: v.paymentTerms, currency: v.currency }; }),
         people: users().filter(function (x) { return x.active; }).map(function (x) { return { username: x.username, name: x.name, role: x.role, department: x.department }; }),
@@ -264,10 +350,11 @@ var PRPO = (function () {
       var live = activePoIds();
       var isOwner = pr.requester === u.username || u.role === 'Admin';
       return {
-        pr: prRow(u, pr), reason: pr.reason, rateToUSD: num(pr.rateToUSD), attachments: json(pr.attachments, []), items: items, pos: pos, history: history, levels: levels,
+        pr: prRow(u, pr), reason: pr.reason, costCenterName: pr.costCenter ? ccName(pr.costCenter) : '', rateToUSD: num(pr.rateToUSD), attachments: json(pr.attachments, []), items: items, pos: pos, history: history, levels: levels,
         budget: budgetInfo(pr.department),
         can: {
           edit: isOwner && [PR_ST.DRAFT, PR_ST.RETURNED].indexOf(pr.status) >= 0,
+          copy: u.role === 'Admin' || (!!u.department && (pr.requester === u.username || pr.department === u.department)),
           approve: canApprovePR(u, pr),
           cancel: isOwner && [PR_ST.DRAFT, PR_ST.RETURNED, PR_ST.PENDING, PR_ST.APPROVED].indexOf(pr.status) >= 0 && !prItems(pr.id).some(function (i) { return i.poId && live[i.poId]; }),
           createPO: is(u, ['Purchasing', 'Admin']) && [PR_ST.APPROVED, PR_ST.ORDERED].indexOf(pr.status) >= 0 && items.some(function (i) { return !(i.poId && live[i.poId]); }),
@@ -279,20 +366,25 @@ var PRPO = (function () {
       var d = p.pr || {}, items = (p.items || []).filter(function (i) { return str(i.item); });
       if (!str(d.title)) fail('Title is required');
       if (!items.length) fail('Add at least one item');
-      var dept = str(d.department) || u.department;
+      if (u.role !== 'Admin' && !u.department) fail('Your account has no department yet — ask Admin to set it in Users');
+      var dept = u.role === 'Admin' ? (str(d.department) || u.department) : u.department;
       if (!find('Departments', function (x) { return x.code === dept; })) fail('Please choose a department');
-      if (!is(u, SEE_ALL) && dept !== u.department) fail('You can only request for your own department');
+      var cc = str(d.costCenter);
+      if (cc && !find('CostCenters', function (x) { return x.code === cc; })) fail('Unknown cost center: ' + cc);
       var cur = str(d.currency) || 'USD', rate = rateOf(cur);
       var lines = items.map(function (i, k) {
         var qty = num(i.qty), price = num(i.unitPrice);
         if (qty <= 0) fail('Quantity must be more than 0 (' + i.item + ')');
         if (price < 0) fail('Price cannot be negative');
-        return { line: k + 1, item: str(i.item), description: str(i.description), qty: qty, unit: str(i.unit), unitPrice: price, amount: r2(qty * price) };
+        var unit = str(i.unit) || 'pc';
+        if (/^[\d.,\s]+$/.test(unit)) fail('Unit for "' + str(i.item) + '" should be a unit like pc, box or kg — not a number');
+        return { line: k + 1, item: str(i.item), description: str(i.description), qty: qty, unit: unit, unitPrice: price, amount: r2(qty * price) };
       });
       var total = r2(lines.reduce(function (s, l) { return s + l.amount; }, 0));
       var t = now(), id = str(d.id), row = {
         title: str(d.title), department: dept, neededBy: str(d.neededBy), currency: cur, rateToUSD: String(rate), totalAmount: String(total),
         totalUSD: String(r2(total * rate)), reason: str(d.reason), attachments: JSON.stringify(d.attachments || []), updatedAt: t, updatedBy: u.name,
+        priority: d.priority === 'Urgent' ? 'Urgent' : 'Normal', costCenter: cc,
       };
       if (!id) {
         id = nextId('PR');
@@ -311,8 +403,7 @@ var PRPO = (function () {
         var usd = r2(total * rate), lv = requiredLevels(usd);
         db.update('PR', function (x) { return x.id === id; }, { status: PR_ST.PENDING, requiredLevels: lv.join(','), currentLevel: String(lv[0]), submittedAt: t, lastActionAt: t, lastRemindedAt: '' });
         log(u.username, 'SUBMIT', id, money(total, cur) + ' (USD ' + r2(usd) + ') → ' + lv.map(function (x) { var r = ruleOf(x); return r ? r.label : x; }).join(' → '));
-        var pr = prOf(id);
-        notify(approversFor(pr, lv[0]), { type: 'approval', title: 'Approval needed: ' + id, body: pr.title + ' · ' + money(total, cur) + ' from ' + u.name, docId: id });
+        notifyApprovers(prOf(id), lv[0], 0);
       }
       return getPR(u, { id: id });
     }
@@ -328,21 +419,20 @@ var PRPO = (function () {
         log(u.username, 'APPROVE L' + pr.currentLevel, pr.id, comment);
         if (idx >= 0 && idx < lv.length - 1) {
           db.update('PR', function (x) { return x.id === pr.id; }, { currentLevel: lv[idx + 1], lastActionAt: t, lastRemindedAt: '' });
-          var pr2 = prOf(pr.id);
-          notify(approversFor(pr2, lv[idx + 1]), { type: 'approval', title: 'Approval needed: ' + pr.id, body: pr.title + ' · ' + money(pr.totalAmount, pr.currency) + ' from ' + pr.requesterName, docId: pr.id });
+          notifyApprovers(prOf(pr.id), lv[idx + 1], 0);
         } else {
           db.update('PR', function (x) { return x.id === pr.id; }, { status: PR_ST.APPROVED, currentLevel: '', approvedAt: t, lastActionAt: t });
-          notify([pr.requester], { type: 'approved', title: 'PR approved: ' + pr.id, body: pr.title + ' was approved. Purchasing will issue the PO.', docId: pr.id });
-          notify(byRole(['Purchasing']), { type: 'topo', title: 'Ready for PO: ' + pr.id, body: pr.title + ' · ' + money(pr.totalAmount, pr.currency) + ' · ' + pr.department, docId: pr.id });
+          notifyResult(prOf(pr.id), 'approved', comment, u.name);
+          notify(byRole(['Purchasing']), { type: 'topo', title: urgentTag(pr) + 'Ready for PO: ' + pr.id, body: pr.title + ' · ' + money(pr.totalAmount, pr.currency) + ' · ' + pr.department, docId: pr.id });
         }
       } else if (act === 'return') {
         db.update('PR', function (x) { return x.id === pr.id; }, { status: PR_ST.RETURNED, currentLevel: '', lastActionAt: t });
         log(u.username, 'RETURN', pr.id, comment);
-        notify([pr.requester], { type: 'returned', title: 'Sent back: ' + pr.id, body: '"' + comment + '" — ' + u.name, docId: pr.id });
+        notifyResult(prOf(pr.id), 'returned', comment, u.name);
       } else if (act === 'reject') {
         db.update('PR', function (x) { return x.id === pr.id; }, { status: PR_ST.REJECTED, currentLevel: '', lastActionAt: t });
         log(u.username, 'REJECT', pr.id, comment);
-        notify([pr.requester], { type: 'rejected', title: 'Rejected: ' + pr.id, body: '"' + comment + '" — ' + u.name, docId: pr.id });
+        notifyResult(prOf(pr.id), 'rejected', comment, u.name);
       } else if (act === 'cancel') {
         var info = getPR(u, { id: pr.id });
         if (!info.can.cancel) fail('This PR cannot be cancelled');
@@ -400,7 +490,7 @@ var PRPO = (function () {
         deliveryDate: str(d.deliveryDate), deliverTo: str(d.deliverTo), note: str(d.note), updatedAt: t };
       if (!existing) {
         id = nextId('PO');
-        row.id = id; row.prId = prId; row.title = pr.title; row.department = pr.department; row.status = PO_ST.DRAFT;
+        row.id = id; row.prId = prId; row.title = pr.title; row.department = pr.department; row.costCenter = pr.costCenter || ''; row.status = PO_ST.DRAFT;
         row.createdBy = u.username; row.createdByName = u.name; row.createdAt = t; row.issuedAt = ''; row.pdfUrl = '';
         db.insert('PO', row); log(u.username, 'PO CREATE', id, vendor.name + ' · ' + money(total, cur));
       } else {
@@ -596,9 +686,13 @@ var PRPO = (function () {
       return { name: str(p.name).slice(0, 120), url: svc.saveFile(str(p.name), str(p.mime), b64) };
     }
 
+    function spendBy(pos, keyFn) {
+      var o = {}; pos.forEach(function (p) { var k = keyFn(p); o[k] = (o[k] || 0) + num(p.totalUSD); });
+      return Object.keys(o).map(function (k) { return { name: k, usd: r2(o[k]) }; }).sort(function (a, b) { return b.usd - a.usd; });
+    }
     // ---------- dashboard ----------
     function dashboard(u) {
-      if (!is(u, ['Manager', 'Executive', 'Purchasing', 'Admin'])) fail('Dashboard is for managers / purchasing');
+      if (!is(u, ['Manager', 'MD', 'Purchasing', 'Admin'])) fail('Dashboard is for managers / purchasing');
       var month = today().slice(0, 7), t = now();
       var pos = all('PO'), prs = all('PR');
       var spend = pos.filter(function (p) { return PO_LIVE.indexOf(p.status) >= 0 && str(p.issuedAt).slice(0, 7) === month; }).reduce(function (s, p) { return s + num(p.totalUSD); }, 0);
@@ -618,55 +712,189 @@ var PRPO = (function () {
         kpis: { spendUSD: r2(spend), pendingPR: prs.filter(function (p) { return p.status === PR_ST.PENDING; }).length, waitingPO: prs.filter(function (p) { return p.status === PR_ST.APPROVED; }).length, avgApproveDays: Math.round(avg * 10) / 10, latePO: late.length },
         departments: all('Departments').filter(function (d) { return d.active === '' || bool(d.active); }).map(function (d) { var b = budgetInfo(d.code, month); b.name = d.name || d.code; return b; }),
         vendors: Object.keys(byVendor).map(function (k) { return { name: k, usd: r2(byVendor[k]) }; }).sort(function (a, b) { return b.usd - a.usd; }).slice(0, 8),
+        costCenters: spendBy(pos.filter(function (p) { return PO_LIVE.indexOf(p.status) >= 0 && str(p.issuedAt).slice(0, 7) === month; }), function (p) { return p.costCenter ? ccName(p.costCenter) : 'Unassigned'; }),
         aging: aging.slice(0, 15),
       };
     }
 
     // ---------- scheduled jobs (called by triggers) ----------
     function reminders() {
-      var t = now(), hrs = num(settings().reminderHours) || 48, sent = 0;
+      var st = settings(), t = now(), sent = 0;
       all('PR').filter(function (p) { return p.status === PR_ST.PENDING; }).forEach(function (p) {
+        var urgent = p.priority === 'Urgent', hrs = urgent ? (num(st.urgentReminderHours) || 24) : (num(st.reminderHours) || 48);
         if (hoursBetween(p.lastActionAt, t) < hrs) return;
         if (p.lastRemindedAt && hoursBetween(p.lastRemindedAt, t) < 24) return;
-        notify(approversFor(p, p.currentLevel), { type: 'reminder', title: 'Reminder: ' + p.id + ' is waiting', body: p.title + ' · waiting ' + Math.floor(hoursBetween(p.lastActionAt, t) / 24) + ' days', docId: p.id });
+        notifyApprovers(p, p.currentLevel, Math.max(1, Math.floor(hoursBetween(p.lastActionAt, t) / 24)));
         db.update('PR', function (x) { return x.id === p.id; }, { lastRemindedAt: t }); sent++;
       });
       return sent;
     }
+    // ---------- summary emails ----------
+    function shift(ts, days) {
+      var d = new Date(parseTs(ts) + days * 86400000), p2 = function (n) { return ('0' + n).slice(-2); };
+      return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+    }
+    function prevMonth(m) { var y = +m.slice(0, 4), mo = +m.slice(5, 7) - 1; if (!mo) { y--; mo = 12; } return y + '-' + ('0' + mo).slice(-2); }
+    var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    function monthName(m) { return MONTHS[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4); }
+    var E = {
+      wrap: function (title, sub, body, link) {
+        return '<div style="font-family:Arial,Helvetica,sans-serif;color:#1c2430;max-width:660px;font-size:14px">' +
+          '<div style="background:#1f3a5f;color:#ffffff;border-radius:8px;padding:14px 16px"><div style="font-size:17px;font-weight:bold">' + esc(title) + '</div><div style="font-size:12px;color:#c9d6e8">' + esc(sub) + '</div></div>' +
+          body + (link ? '<p style="margin:16px 0 6px"><a href="' + esc(link) + '" style="background:#1f3a5f;color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block;font-weight:bold">Open PR/PO app</a></p>' : '') +
+          '<p style="font-size:11px;color:#8a94a3;margin-top:14px">Sent automatically by the PR/PO system.</p></div>';
+      },
+      kpis: function (list) {
+        return '<table style="width:100%;border-collapse:separate;border-spacing:6px;margin:8px -6px"><tr>' + list.map(function (k) {
+          return '<td style="background:' + (k[2] || '#f3f5f9') + ';border-radius:8px;padding:10px;vertical-align:top"><div style="font-size:11px;color:' + (k[3] || '#5b6676') + '">' + esc(k[0]) + '</div><div style="font-size:19px;font-weight:bold;color:' + (k[3] || '#1c2430') + '">' + esc(k[1]) + '</div></td>';
+        }).join('') + '</tr></table>';
+      },
+      table: function (head, rows, right) {
+        right = right || [];
+        var td = function (c, i, h) { return '<td style="padding:5px 6px;border-bottom:1px solid ' + (h ? '#d5dbe5;color:#5b6676;font-size:11px' : '#eef0f4') + ';' + (right.indexOf(i) >= 0 ? 'text-align:right;' : '') + (c && c.s ? c.s : '') + '">' + esc(c && c.v !== undefined ? c.v : c) + '</td>'; };
+        return '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px"><tr>' + head.map(function (c, i) { return td(c, i, true); }).join('') + '</tr>' +
+          rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return td(c, i, false); }).join('') + '</tr>'; }).join('') + '</table>';
+      },
+      bar: function (b) {
+        if (!b.budgetUSD) return '<div style="font-size:12px;color:#5b6676">No monthly budget set</div>';
+        var u = Math.min(100, Math.round(b.usedUSD / b.budgetUSD * 100)), c = Math.max(0, Math.min(100 - u, Math.round(b.committedUSD / b.budgetUSD * 100)));
+        var warn = b.pct > 85;
+        return '<table style="width:100%;border-collapse:collapse;margin:6px 0 3px"><tr>' + (u ? '<td style="height:8px;width:' + u + '%;background:' + (warn ? '#c2410c' : '#2c5282') + '"></td>' : '') +
+          (c ? '<td style="height:8px;width:' + c + '%;background:' + (warn ? '#f0997b' : '#9db8e0') + '"></td>' : '') + '<td style="height:8px;background:#e9edf3"></td></tr></table>' +
+          '<div style="font-size:12px;color:#5b6676">Spent USD ' + money(b.usedUSD) + ' · In approval USD ' + money(b.committedUSD) + ' · Budget USD ' + money(b.budgetUSD) + '</div>';
+      },
+    };
+    function between(ts, from, to) { ts = str(ts); return ts && ts >= from && ts <= to; }
+    function depts() { return all('Departments').filter(function (d) { return d.active === '' || bool(d.active); }); }
+
+    function adminWeekly(from, to) {
+      var prs = all('PR'), pos = all('PO'), logs = all('Log'), t = to;
+      var prDept = {}; prs.forEach(function (p) { prDept[p.id] = p.department; });
+      var poDept = {}; pos.forEach(function (p) { poDept[p.id] = p.department; });
+      var weekPO = pos.filter(function (p) { return PO_LIVE.indexOf(p.status) >= 0 && between(p.issuedAt, from, to); });
+      var pending = prs.filter(function (p) { return p.status === PR_ST.PENDING; });
+      var late = pos.filter(function (p) { return poRow(p).late; });
+      var totals = [];
+      var sections = depts().map(function (d) {
+        var c = d.code, b = budgetInfo(c);
+        var st = {
+          newPR: prs.filter(function (p) { return p.department === c && between(p.submittedAt, from, to); }).length,
+          approved: prs.filter(function (p) { return p.department === c && between(p.approvedAt, from, to); }).length,
+          back: logs.filter(function (l) { return (l.action === 'RETURN' || l.action === 'REJECT') && prDept[l.docId] === c && between(l.time, from, to); }).length,
+          po: weekPO.filter(function (p) { return p.department === c; }),
+          recv: uniq(logs.filter(function (l) { return l.action === 'RECEIVE' && poDept[l.docId] === c && between(l.time, from, to); }).map(function (l) { return l.docId; })).length,
+        };
+        var waits = [];
+        pending.filter(function (p) { return p.department === c; }).forEach(function (p) { var a = Math.floor(hoursBetween(p.lastActionAt, t) / 24); waits.push([p.id, (p.priority === 'Urgent' ? '[URGENT] ' : '') + p.title, waitingOn(p), { v: a + ' days', s: a >= 2 ? 'color:#b42318;font-weight:bold' : '' }, a]); });
+        prs.filter(function (p) { return p.department === c && p.status === PR_ST.APPROVED; }).forEach(function (p) { var a = Math.floor(hoursBetween(p.approvedAt, t) / 24); waits.push([p.id, p.title, 'Purchasing (issue PO)', a + ' days', a]); });
+        late.filter(function (p) { return p.department === c; }).forEach(function (p) { var a = Math.floor(hoursBetween(p.deliveryDate, t) / 24); waits.push([p.id, p.title + ' · ' + p.vendorName, 'Vendor (late)', { v: a + ' days late', s: 'color:#b42318;font-weight:bold' }, a + 100]); });
+        waits.sort(function (x, y) { return y[4] - x[4]; });
+        var poUSD = st.po.reduce(function (s2, p) { return s2 + num(p.totalUSD); }, 0);
+        totals.push([d.name || c, st.newPR, waits.filter(function (w) { return w[2] !== 'Vendor (late)'; }).length, st.po.length, { v: b.budgetUSD ? b.pct + '%' : '—', s: b.pct > 85 ? 'color:#c2410c;font-weight:bold' : '' }, poUSD]);
+        return '<div style="border:1px solid #e2e6ee;border-radius:8px;padding:12px 14px;margin:10px 0">' +
+          '<table style="width:100%"><tr><td style="font-size:15px;font-weight:bold">' + esc(d.name || c) + ' (' + esc(c) + ')</td><td style="text-align:right;font-size:12px;' + (b.pct > 85 ? 'color:#c2410c;font-weight:bold' : 'color:#5b6676') + '">' + (b.budgetUSD ? 'Budget ' + b.pct + '% used' : '') + '</td></tr></table>' +
+          E.bar(b) +
+          '<div style="font-size:13px;margin-top:8px">This week: ' + st.newPR + ' new PRs · ' + st.approved + ' approved · ' + st.back + ' sent back / rejected · ' + st.po.length + ' POs issued (USD ' + money(poUSD) + ') · ' + st.recv + ' deliveries received</div>' +
+          (waits.length ? E.table(['Document', 'Title', 'Waiting on', 'Age'], waits.map(function (w) { return w.slice(0, 4); }), [3]) : '<div style="font-size:12px;color:#1d7a52;margin-top:6px">Nothing waiting — all clear</div>') +
+          '</div>';
+      });
+      var spend = weekPO.reduce(function (s2, p) { return s2 + num(p.totalUSD); }, 0);
+      var sumRow = totals.reduce(function (a, r) { return [a[0] + r[1], a[1] + r[2], a[2] + r[3]]; }, [0, 0, 0]);
+      var body = E.kpis([['New PRs', String(prs.filter(function (p) { return between(p.submittedAt, from, to); }).length)], ['POs issued', weekPO.length + ' · USD ' + money(spend)],
+        ['Waiting approval', String(pending.length), '#fff2cc', '#8a5a00'], ['Late deliveries', String(late.length), '#fde4e4', '#b42318']]) +
+        sections.join('') +
+        '<div style="font-size:14px;font-weight:bold;margin:14px 0 2px">All departments</div>' +
+        E.table(['Department', 'New PR', 'Waiting', 'PO issued', 'Budget used'], totals.map(function (r) { return r.slice(0, 5); }).concat([[{ v: 'Total', s: 'font-weight:bold' }, { v: sumRow[0], s: 'font-weight:bold' }, { v: sumRow[1], s: 'font-weight:bold' }, { v: sumRow[2], s: 'font-weight:bold' }, { v: 'USD ' + money(spend) + ' spent', s: 'font-weight:bold' }]]), [4]);
+      return body;
+    }
+
     function weeklyDigest() {
-      var st = settings(), t = now(), out = [], prs = all('PR'), pos = all('PO');
-      var link = st.appUrl ? '<p><a href="' + esc(st.appUrl) + '" style="background:#1f3a5f;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block">Open PR/PO app</a></p>' : '';
-      function table(rows) {
-        if (!rows.length) return '';
-        return '<table style="border-collapse:collapse;width:100%;font-size:13px">' + rows.map(function (r) {
-          return '<tr>' + r.map(function (c) { return '<td style="padding:6px 8px;border-bottom:1px solid #e2e6ee">' + esc(c) + '</td>'; }).join('') + '</tr>';
-        }).join('') + '</table>';
-      }
+      var st = settings(), t = now(), from = shift(t, -7), out = [], prs = all('PR'), pos = all('PO');
+      var weekPO = pos.filter(function (p) { return PO_LIVE.indexOf(p.status) >= 0 && between(p.issuedAt, from, t); });
+      if (!weekPO.length) return out; // no PO issued this week → no summary emails at all
+      var link = appLink(''), period = from.slice(0, 10) + ' to ' + t.slice(0, 10);
+      var adminBody = null;
       users().filter(function (u) { return u.active && u.email; }).forEach(function (u) {
+        if (is(u, ['Admin', 'MD'])) {
+          if (adminBody === null) adminBody = adminWeekly(from, t);
+          out.push({ to: u.email, subject: 'PR/PO weekly summary · ' + period + ' · all departments',
+            html: E.wrap('Weekly summary — all departments', 'Hi ' + u.name + ' · ' + period + ' · amounts in USD', adminBody, link) });
+          return;
+        }
         var parts = [];
         var mine = prs.filter(function (p) { return p.requester === u.username && [PR_ST.DRAFT, PR_ST.RETURNED, PR_ST.PENDING, PR_ST.APPROVED].indexOf(p.status) >= 0; });
-        if (mine.length) parts.push('<h3>My open requests (' + mine.length + ')</h3>' + table(mine.map(function (p) { return [p.id, p.title, p.status, waitingOn(p)]; })));
+        if (mine.length) parts.push('<h3 style="font-size:15px;margin:16px 0 4px">Your open requests (' + mine.length + ')</h3>' + E.table(['PR', 'Title', 'Status', 'Waiting on'], mine.map(function (p) { return [p.id, p.title, p.status, waitingOn(p)]; })));
         var toApprove = prs.filter(function (p) { return canApprovePR(u, p); });
-        if (toApprove.length) parts.push('<h3>Waiting for your approval (' + toApprove.length + ')</h3>' + table(toApprove.map(function (p) { return [p.id, p.title, money(p.totalAmount, p.currency), Math.floor(hoursBetween(p.lastActionAt, t) / 24) + ' days']; })));
-        if (is(u, ['Purchasing', 'Admin'])) {
+        if (toApprove.length) parts.push('<h3 style="font-size:15px;margin:16px 0 4px">Waiting for your approval (' + toApprove.length + ')</h3>' + E.table(['PR', 'Title', 'Amount', 'Waiting'], toApprove.map(function (p) { return [p.id, urgentTag(p) + p.title, money(p.totalAmount, p.currency), Math.floor(hoursBetween(p.lastActionAt, t) / 24) + ' days']; }), [2, 3]));
+        if (is(u, ['Purchasing'])) {
           var toPo = prs.filter(function (p) { return p.status === PR_ST.APPROVED; });
-          if (toPo.length) parts.push('<h3>Approved PRs without PO (' + toPo.length + ')</h3>' + table(toPo.map(function (p) { return [p.id, p.title, p.department, money(p.totalAmount, p.currency)]; })));
+          if (toPo.length) parts.push('<h3 style="font-size:15px;margin:16px 0 4px">Approved PRs without PO (' + toPo.length + ')</h3>' + E.table(['PR', 'Title', 'Department', 'Amount'], toPo.map(function (p) { return [p.id, p.title, deptName(p.department), money(p.totalAmount, p.currency)]; }), [3]));
           var late = pos.filter(function (p) { return poRow(p).late; });
-          if (late.length) parts.push('<h3>Late deliveries (' + late.length + ')</h3>' + table(late.map(function (p) { return [p.id, p.vendorName, 'due ' + p.deliveryDate]; })));
+          if (late.length) parts.push('<h3 style="font-size:15px;margin:16px 0 4px">Late deliveries (' + late.length + ')</h3>' + E.table(['PO', 'Vendor', 'Due'], late.map(function (p) { return [p.id, p.vendorName, p.deliveryDate]; })));
         }
-        if (is(u, ['Manager', 'Executive', 'Admin'])) {
-          var week = pos.filter(function (p) { return PO_LIVE.indexOf(p.status) >= 0 && p.issuedAt && hoursBetween(p.issuedAt, t) <= 168; });
-          var sum = week.reduce(function (s, p) { return s + num(p.totalUSD); }, 0);
-          var d = dashboard(u);
-          parts.push('<h3>Last 7 days</h3><p>' + week.length + ' POs issued · USD ' + money(sum) + '</p>' +
-            table(d.departments.map(function (x) { return [x.name, 'USD ' + money(x.usedUSD + x.committedUSD) + ' / ' + money(x.budgetUSD), x.pct + '%']; })));
-          if (d.aging.length) parts.push('<h3>Waiting the longest</h3>' + table(d.aging.slice(0, 5).map(function (a) { return [a.docId, a.title, a.waitingOn, a.ageDays + ' days']; })));
+        if (is(u, ['Manager'])) {
+          var sum = weekPO.reduce(function (s2, p) { return s2 + num(p.totalUSD); }, 0);
+          parts.push('<h3 style="font-size:15px;margin:16px 0 4px">Last 7 days</h3><p style="margin:0">' + weekPO.length + ' POs issued · USD ' + money(sum) + '</p>' +
+            E.table(['Department', 'Spent + in approval / budget', 'Used'], depts().map(function (d) { var b = budgetInfo(d.code); return [d.name || d.code, 'USD ' + money(b.usedUSD + b.committedUSD) + ' / ' + money(b.budgetUSD), b.pct + '%']; }), [2]));
         }
         if (!parts.length) return;
-        out.push({ to: u.email, subject: 'PR/PO weekly summary — ' + t.slice(0, 10),
-          html: '<div style="font-family:Arial,sans-serif;color:#1c2430;max-width:640px"><h2 style="color:#1f3a5f">Hi ' + esc(u.name) + ', here is your weekly PR/PO summary</h2>' + parts.join('') + link + '</div>' });
+        out.push({ to: u.email, subject: 'PR/PO weekly summary · ' + period, html: E.wrap('Your weekly PR/PO summary', 'Hi ' + u.name + ' · ' + period, parts.join(''), link) });
       });
       return out;
+    }
+
+    function monthlyDigest() {
+      var t = now(), m = prevMonth(t.slice(0, 7)), m0 = prevMonth(m), out = [];
+      var pos = all('PO').filter(function (p) { return PO_LIVE.indexOf(p.status) >= 0; }), prs = all('PR');
+      var inM = pos.filter(function (p) { return str(p.issuedAt).slice(0, 7) === m; });
+      if (!inM.length) return out; // no PO issued last month → no monthly email
+      var spend = inM.reduce(function (s2, p) { return s2 + num(p.totalUSD); }, 0);
+      var prevSpend = pos.filter(function (p) { return str(p.issuedAt).slice(0, 7) === m0; }).reduce(function (s2, p) { return s2 + num(p.totalUSD); }, 0);
+      var chg = prevSpend ? Math.round((spend - prevSpend) / prevSpend * 100) : null;
+      var sub = prs.filter(function (p) { return str(p.submittedAt).slice(0, 7) === m; });
+      var appr = prs.filter(function (p) { return str(p.approvedAt).slice(0, 7) === m; });
+      var rej = all('Log').filter(function (l) { return l.action === 'REJECT' && str(l.time).slice(0, 7) === m; }).length;
+      var avg = appr.length ? appr.reduce(function (s2, p) { return s2 + hoursBetween(p.submittedAt, p.approvedAt); }, 0) / appr.length / 24 : 0;
+      var deptRows = depts().map(function (d) {
+        var b = budgetInfo(d.code, m), sp = inM.filter(function (p) { return p.department === d.code; }).reduce(function (s2, p) { return s2 + num(p.totalUSD); }, 0);
+        var pct = b.budgetUSD ? Math.round(sp / b.budgetUSD * 100) : 0;
+        return [d.name || d.code, inM.filter(function (p) { return p.department === d.code; }).length, money(sp), b.budgetUSD ? money(b.budgetUSD) : '—', { v: b.budgetUSD ? pct + '%' : '—', s: pct > 100 ? 'color:#b42318;font-weight:bold' : pct > 85 ? 'color:#c2410c;font-weight:bold' : '' }];
+      });
+      var vend = spendBy(inM, function (p) { return p.vendorName; }).slice(0, 10);
+      var ccs = spendBy(inM, function (p) { return p.costCenter ? ccName(p.costCenter) : 'Unassigned'; });
+      var body = E.kpis([['Spend (POs issued)', 'USD ' + money(spend)], ['vs ' + monthName(m0), chg === null ? '—' : (chg >= 0 ? '+' : '') + chg + '%', chg > 0 ? '#fff2cc' : '#e3f4ec', chg > 0 ? '#8a5a00' : '#1d7a52'],
+        ['POs issued', String(inM.length)], ['Avg. submit → approved', (Math.round(avg * 10) / 10) + ' days']]) +
+        '<div style="font-size:13px;margin:4px 0 10px">PRs submitted: <b>' + sub.length + '</b> · approved: <b>' + appr.length + '</b> · rejected: <b>' + rej + '</b></div>' +
+        '<div style="font-size:14px;font-weight:bold;margin:14px 0 2px">Spend by department</div>' + E.table(['Department', 'POs', 'Spent (USD)', 'Budget (USD)', 'Used'], deptRows, [1, 2, 3, 4]) +
+        '<div style="font-size:14px;font-weight:bold;margin:14px 0 2px">Top vendors</div>' + E.table(['Vendor', 'Spent (USD)', 'Share'], vend.map(function (v) { return [v.name, money(v.usd), Math.round(v.usd / spend * 100) + '%']; }), [1, 2]) +
+        '<div style="font-size:14px;font-weight:bold;margin:14px 0 2px">Spend by cost center</div>' + E.table(['Cost center', 'Spent (USD)', 'Share'], ccs.map(function (v) { return [v.name, money(v.usd), Math.round(v.usd / spend * 100) + '%']; }), [1, 2]);
+      users().filter(function (u) { return u.active && u.email && is(u, ['Admin', 'MD']); }).forEach(function (u) {
+        out.push({ to: u.email, subject: 'PR/PO monthly summary · ' + monthName(m), html: E.wrap('Monthly summary — ' + monthName(m), 'Hi ' + u.name + ' · all departments · amounts in USD', body, appLink('')) });
+      });
+      return out;
+    }
+
+    // ---------- export (Excel) ----------
+    function exportDocs(u, p) {
+      var from = str(p.from) || '0000', to = str(p.to) || '9999', kind = p.kind === 'po' ? 'po' : 'pr';
+      var inRange = function (ts) { var d = str(ts).slice(0, 10); return d >= from && d <= to; };
+      var vis = listDocs(u), ids = {};
+      if (kind === 'pr') {
+        var prs = all('PR').filter(function (x) { return vis.prs.some(function (v) { return v.id === x.id; }) && inRange(x.createdAt); });
+        prs.forEach(function (x) { ids[x.id] = 1; });
+        return { kind: 'pr',
+          head: ['PR', 'Title', 'Status', 'Priority', 'Department', 'Cost center', 'Requested by', 'Needed by', 'Currency', 'Total', 'Rate to USD', 'Total USD', 'Created', 'Submitted', 'Approved'],
+          rows: prs.map(function (x) { return [x.id, x.title, x.status, x.priority || 'Normal', deptName(x.department), x.costCenter ? ccName(x.costCenter) : '', x.requesterName, x.neededBy, x.currency, num(x.totalAmount), num(x.rateToUSD), num(x.totalUSD), x.createdAt, x.submittedAt, x.approvedAt]; }),
+          lineHead: ['PR', 'Line', 'Item', 'Details', 'Qty', 'Unit', 'Unit price', 'Amount', 'PO'],
+          lines: all('PRItems').filter(function (i) { return ids[i.prId]; }).map(function (i) { return [i.prId, num(i.line), i.item, i.description, num(i.qty), i.unit, num(i.unitPrice), num(i.amount), i.poId]; }) };
+      }
+      var pos = all('PO').filter(function (x) { return vis.pos.some(function (v) { return v.id === x.id; }) && inRange(x.issuedAt || x.createdAt); });
+      pos.forEach(function (x) { ids[x.id] = 1; });
+      return { kind: 'po',
+        head: ['PO', 'PR', 'Title', 'Status', 'Department', 'Cost center', 'Vendor', 'Currency', 'Subtotal', 'VAT %', 'VAT', 'Total', 'Total USD', 'Delivery date', 'Issued', 'Created by'],
+        rows: pos.map(function (x) { return [x.id, x.prId, x.title, x.status, deptName(x.department), x.costCenter ? ccName(x.costCenter) : '', x.vendorName, x.currency, num(x.subtotal), num(x.vatPct), num(x.vatAmount), num(x.total), num(x.totalUSD), x.deliveryDate, x.issuedAt, x.createdByName]; }),
+        lineHead: ['PO', 'Line', 'Item', 'Qty', 'Unit', 'Unit price', 'Amount', 'Received qty'],
+        lines: all('POItems').filter(function (i) { return ids[i.poId]; }).map(function (i) { return [i.poId, num(i.line), i.item, num(i.qty), i.unit, num(i.unitPrice), num(i.amount), num(i.receivedQty)]; }) };
     }
 
     // ---------- router ----------
@@ -674,10 +902,10 @@ var PRPO = (function () {
       bootstrap: bootstrap, list: listDocs, getPR: getPR, savePR: savePR, prAction: prAction, getPO: getPO, savePO: savePO, poAction: poAction,
       receive: receive, notifications: myNotifications, markRead: markRead, changePin: changePin, telegramLink: telegramLink, telegramCheck: telegramCheck,
       telegramUnlink: telegramUnlink, pushRegister: pushRegister, pushUnregister: pushUnregister, listUsers: listUsers, createUser: createUser,
-      updateUser: updateUser, saveVendor: saveVendor, saveRates: saveRates, upload: saveFile, dashboard: dashboard,
+      updateUser: updateUser, saveVendor: saveVendor, saveRates: saveRates, upload: saveFile, dashboard: dashboard, export: exportDocs,
       budget: function (u, p) { return budgetInfo(str(p.department) || u.department); },
     };
-    var READ_ONLY = { bootstrap: 1, list: 1, getPR: 1, getPO: 1, notifications: 1, listUsers: 1, dashboard: 1, budget: 1 };
+    var READ_ONLY = { bootstrap: 1, list: 1, getPR: 1, getPO: 1, notifications: 1, listUsers: 1, dashboard: 1, budget: 1, export: 1 };
 
     function handle(action, payload, token) {
       payload = payload || {};
@@ -688,13 +916,13 @@ var PRPO = (function () {
       return fn(u, payload);
     }
 
-    return { handle: handle, isReadOnly: function (a) { return !!READ_ONLY[a]; }, reminders: reminders, weeklyDigest: weeklyDigest };
+    return { handle: handle, isReadOnly: function (a) { return !!READ_ONLY[a]; }, reminders: reminders, weeklyDigest: weeklyDigest, monthlyDigest: monthlyDigest };
   }
 
   // ---------- printable PO (used for the PDF and the demo preview) ----------
   function poHtml(po, items, vendor, st) {
     var rows = items.map(function (i, k) {
-      return '<tr><td>' + (k + 1) + '</td><td>' + esc(i.item) + '</td><td class="r">' + esc(i.qty) + ' ' + esc(i.unit) + '</td><td class="r">' + money(i.unitPrice) + '</td><td class="r">' + money(i.amount) + '</td></tr>';
+      return '<tr><td>' + (k + 1) + '</td><td>' + esc(i.item) + '</td><td class="r">' + esc(i.qty) + '</td><td>' + esc(i.unit) + '</td><td class="r">' + money(i.unitPrice) + '</td><td class="r">' + money(i.amount) + '</td></tr>';
     }).join('');
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
       'body{font-family:Arial,Helvetica,sans-serif;color:#1c2430;font-size:12px;margin:28px}h1{font-size:22px;margin:0;color:#1f3a5f}' +
@@ -708,7 +936,7 @@ var PRPO = (function () {
       '<table style="margin-top:16px"><tr><td class="box" style="width:50%;vertical-align:top"><b>Vendor</b><br>' + esc(vendor.name || po.vendorName) + '<br>' + esc(vendor.address) +
       (vendor.taxId ? '<br>Tax ID: ' + esc(vendor.taxId) : '') + (vendor.contact ? '<br>Attn: ' + esc(vendor.contact) : '') + (vendor.phone ? '<br>Tel: ' + esc(vendor.phone) : '') + '</td>' +
       '<td style="width:2%;border:0"></td><td class="box" style="width:48%;vertical-align:top"><b>Deliver to</b><br>' + esc(po.deliverTo) + '<br><br><b>Delivery date:</b> ' + esc(po.deliveryDate) + '<br><b>Payment terms:</b> ' + esc(po.paymentTerms) + '<br><b>Currency:</b> ' + esc(po.currency) + '</td></tr></table>' +
-      '<table><tr><th>#</th><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Amount</th></tr>' + rows + '</table>' +
+      '<table><tr><th>#</th><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr>' + rows + '</table>' +
       '<table class="tot" style="width:40%;margin-left:60%"><tr><td>Subtotal</td><td class="r">' + money(po.subtotal) + '</td></tr>' +
       '<tr><td>VAT ' + esc(po.vatPct) + '%</td><td class="r">' + money(po.vatAmount) + '</td></tr>' +
       '<tr><td><b>Total ' + esc(po.currency) + '</b></td><td class="r"><b>' + money(po.total) + '</b></td></tr></table>' +
@@ -733,7 +961,7 @@ var PRPO = (function () {
     ApprovalRules: [
       { level: '1', minUSD: '0', approverRole: 'DeptHead', label: 'Dept head' },
       { level: '2', minUSD: '500', approverRole: 'Manager', label: 'Manager' },
-      { level: '3', minUSD: '5000', approverRole: 'Executive', label: 'Executive' },
+      { level: '3', minUSD: '5000', approverRole: 'MD', label: 'MD' },
     ],
     Settings: [
       { key: 'companyName', value: '', note: 'Shown on the PO PDF' },
@@ -746,6 +974,11 @@ var PRPO = (function () {
       { key: 'poTolerancePct', value: '0', note: 'PO may exceed the approved PR amount by this % without extra approval' },
       { key: 'defaultVatPct', value: '10', note: 'Pre-filled VAT % on new POs (can change per PO)' },
       { key: 'defaultDeliverTo', value: '', note: 'Pre-filled delivery address on new POs' },
+      { key: 'urgentReminderHours', value: '24', note: 'Remind approvers of URGENT PRs after this many hours' },
+      { key: 'units', value: DEFAULT_UNITS, note: 'Units offered in the PR form (comma separated) — people can still type their own' },
+    ],
+    CostCenters: [
+      { code: 'GEN', name: 'General', active: 'TRUE' },
     ],
   };
 

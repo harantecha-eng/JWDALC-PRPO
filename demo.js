@@ -31,9 +31,11 @@ const Demo = (() => {
     db.update('Settings', r => r.key === 'companyName', { value: 'Demo Logistics Co., Ltd.' });
     db.update('Settings', r => r.key === 'companyAddress', { value: '[COMPANY ADDRESS]' });
     db.update('Settings', r => r.key === 'defaultDeliverTo', { value: 'Main DC — Gate 2' });
+    db.insert('CostCenters', { code: 'BTG-COLD', name: 'Betagro cold truck', active: 'TRUE' });
+    db.insert('CostCenters', { code: 'WH-GEN', name: 'Warehouse general', active: 'TRUE' });
     const people = [
       ['admin', 'Administrator', 'Admin', 'AD', '1234'], ['sokha', 'Sokha Chan', 'Requester', 'WH', '1111'], ['dara', 'Dara Kim', 'DeptHead', 'WH', '2222'],
-      ['vanna', 'Vanna Lim', 'Manager', '', '3333'], ['chan', 'Chan Sok', 'Executive', '', '4444'], ['mony', 'Mony Ros', 'Purchasing', '', '5555'],
+      ['vanna', 'Vanna Lim', 'Manager', '', '3333'], ['chan', 'Chan Sok', 'MD', '', '4444'], ['mony', 'Mony Ros', 'Purchasing', '', '5555'],
       ['rith', 'Rith Meas', 'Store', '', '6666'], ['pisey', 'Pisey Long', 'DeptHead', 'TR', '7777'],
     ];
     people.forEach(([u, n, r, d, pin]) => db.insert('Users', { username: u, name: n, role: r, department: d, email: '', telegramChatId: '', pinHash: hash(pin, 's-' + u), salt: 's-' + u, active: 'TRUE', createdAt: svc.now(), lastLogin: '' }));
@@ -49,18 +51,24 @@ const Demo = (() => {
     at(11); D('prAction', { id: pr, action: 'approve' }); M('prAction', { id: pr, action: 'approve', comment: 'OK' });
     at(10); let po = B('savePO', { po: { prId: pr, vendorCode: V[2], currency: 'USD', vatPct: 10, deliveryDate: svc.now().slice(0, 10), deliverTo: 'Main DC — Gate 2' }, items: [{ prLine: 1, qty: 12, unitPrice: 40 }], issue: true }).po.id;
     at(6); R('receive', { id: po, lines: [{ line: 1, qty: 12 }] });
+    at(5); B('poAction', { id: po, action: 'close', comment: 'Invoice matched' });
     // 2) PO issued, late
-    at(9); pr = S('savePR', { pr: { title: 'Pallet racking parts', department: 'WH', currency: 'USD' }, items: [{ item: 'Beam 2.7m', qty: 20, unit: 'pc', unitPrice: 85 }, { item: 'Safety pins', qty: 200, unit: 'pc', unitPrice: 0.5 }], submit: true }).pr.id;
+    at(9); pr = S('savePR', { pr: { title: 'Pallet racking parts', department: 'WH', currency: 'USD', costCenter: 'WH-GEN' }, items: [{ item: 'Beam 2.7m', qty: 20, unit: 'pc', unitPrice: 85 }, { item: 'Safety pins', qty: 200, unit: 'pc', unitPrice: 0.5 }], submit: true }).pr.id;
     at(8); D('prAction', { id: pr, action: 'approve' }); M('prAction', { id: pr, action: 'approve' });
     at(7); po = B('savePO', { po: { prId: pr, vendorCode: V[1], currency: 'USD', vatPct: 10, deliveryDate: fmt(new Date(Date.now() - 2 * 86400000)).slice(0, 10), deliverTo: 'Main DC — Gate 2' }, items: [{ prLine: 1, qty: 20, unitPrice: 82 }, { prLine: 2, qty: 200, unitPrice: 0.5 }], issue: true }).po.id;
     // 3) approved, waiting for PO (THB)
-    at(2); pr = S('savePR', { pr: { title: 'Thermometer probes', department: 'WH', currency: 'THB' }, items: [{ item: 'Probe thermometer', qty: 6, unit: 'pc', unitPrice: 1200 }], submit: true }).pr.id;
+    at(2); pr = S('savePR', { pr: { title: 'Thermometer probes', department: 'WH', currency: 'THB', costCenter: 'BTG-COLD' }, items: [{ item: 'Probe thermometer', qty: 6, unit: 'pc', unitPrice: 1200 }], submit: true }).pr.id;
     at(1); D('prAction', { id: pr, action: 'approve' });
     // 4) waiting manager (2 levels)
-    at(3); pr = S('savePR', { pr: { title: 'Forklift tyre replacement', department: 'WH', currency: 'USD', reason: 'Front tyres worn out on FL-03' }, items: [{ item: 'Solid tyre 6.50-10', qty: 2, unit: 'pc', unitPrice: 640 }], submit: true }).pr.id;
+    at(3); pr = S('savePR', { pr: { title: 'Forklift tyre replacement', department: 'WH', currency: 'USD', reason: 'Front tyres worn out on FL-03', priority: 'Urgent', costCenter: 'WH-GEN' }, items: [{ item: 'Solid tyre 6.50-10', qty: 2, unit: 'pc', unitPrice: 640 }], submit: true }).pr.id;
     at(3); D('prAction', { id: pr, action: 'approve' });
     // 5) waiting dept head (Dara) — visible as "Waiting for you" when logged in as dara
     at(1); S('savePR', { pr: { title: 'Stretch film & pallet labels', department: 'WH', currency: 'USD' }, items: [{ item: 'Stretch film 500mm', qty: 20, unit: 'roll', unitPrice: 12 }, { item: 'Pallet labels A6', qty: 10, unit: 'box', unitPrice: 15 }, { item: 'Marker pens', qty: 5, unit: 'box', unitPrice: 6 }], submit: true });
+    // 7) rejected + cancelled examples
+    at(4); let rj = S('savePR', { pr: { title: 'New office sofa', department: 'WH', currency: 'USD' }, items: [{ item: 'Sofa 3-seat', qty: 1, unit: 'pc', unitPrice: 450 }], submit: true }).pr.id;
+    D('prAction', { id: rj, action: 'reject', comment: 'Not a priority this quarter' });
+    at(3); let cn = S('savePR', { pr: { title: 'Spare walkie-talkies', department: 'WH', currency: 'USD' }, items: [{ item: 'Walkie-talkie', qty: 4, unit: 'pc', unitPrice: 35 }] }).pr.id;
+    S('prAction', { id: cn, action: 'cancel', comment: 'Borrowed from Transport instead' });
     // 6) draft (KHR)
     at(0); S('savePR', { pr: { title: 'Cleaning supplies', department: 'WH', currency: 'KHR' }, items: [{ item: 'Floor cleaner 5L', qty: 4, unit: 'can', unitPrice: 48000 }] });
     offsetMs = 0;

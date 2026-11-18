@@ -1,6 +1,6 @@
 // Service worker: app shell cache (opens offline) + push notifications.
 // Bump VERSION whenever you change a front-end file so phones fetch the new version.
-const VERSION = 'prpo-v1';
+const VERSION = 'prpo-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'config.js', 'core.js', 'demo.js', 'api.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

@@ -201,3 +201,31 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .spin { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--line-2); border-top-color: var(--navy); border-radius: 50%; animation: sp 0.8s linear infinite; }
 @keyframes sp { to { transform: rotate(360deg); } }
 .loading { display: flex; justify-content: center; padding: 40px; }
+
+/* tabs on list pages */
+.tabbar { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: -4px 0 12px; overflow-x: auto; scrollbar-width: none; }
+.tabbar button { border: 0; background: none; padding: 10px 14px; cursor: pointer; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; min-height: 44px; }
+.tabbar button.on { color: var(--navy); border-bottom-color: var(--navy); }
+.tabbar .n { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--gray-bg); font-size: 11px; color: var(--muted); margin-left: 4px; }
+.tabbar button.on .n { background: var(--navy); color: #fff; }
+
+/* status colours — each status differs in colour AND lightness, plus an icon */
+.chip svg { width: 13px; height: 13px; stroke-width: 2.4; margin-left: -2px; }
+.chip.st-draft { background: #fff; color: #4a5568; box-shadow: inset 0 0 0 1px #b8c0cc; }
+.chip.st-wait { background: #fff2cc; color: #7a4d00; }
+.chip.st-overdue { background: #b42318; color: #fff; }
+.chip.st-returned { background: #ffe4cc; color: #9a3412; }
+.chip.st-rejected { background: #fde4e4; color: #a31b1b; box-shadow: inset 0 0 0 1px #f0b4b4; }
+.chip.st-approved { background: #d9f2ec; color: #0f6e56; }
+.chip.st-ordered { background: #e3ecf8; color: #1f4f8a; }
+.chip.st-partial { background: #ece8fb; color: #4c3a9e; }
+.chip.st-received { background: #dff3e6; color: #1d7a52; }
+.chip.st-closed { background: #1d7a52; color: #fff; }
+.chip.st-cancelled { background: #4a5568; color: #fff; }
+.doc { position: relative; overflow: hidden; }
+.doc::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: transparent; }
+.doc.st-wait::before { background: #e0a100; } .doc.st-returned::before { background: #ea7a2d; } .doc.st-rejected::before { background: #d64545; }
+.doc.st-approved::before { background: #2f9e8f; } .doc.st-ordered::before { background: #2c5282; } .doc.st-partial::before { background: #6b57d6; }
+.doc.st-received::before { background: #2f9e6b; } .doc.st-closed::before { background: #1d7a52; } .doc.st-cancelled::before { background: #4a5568; }
+.doc.st-cancelled .t, .doc.st-rejected .t { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+.doc.st-cancelled .amt, .doc.st-rejected .amt { color: var(--muted); text-decoration: line-through; }
